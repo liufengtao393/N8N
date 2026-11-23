@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { parseAgentSkillWorkflowMentions, type SkillWorkflowMention } from '@n8n/api-types';
-import { N8nButton, N8nIcon, N8nText } from '@n8n/design-system';
+import { N8nButton, N8nIcon, N8nText, N8nTooltip } from '@n8n/design-system';
 import { useI18n, type BaseTextKey } from '@n8n/i18n';
 
 import { WORKFLOWS_IN_SKILLS_EXPERIMENT } from '@/app/constants/experiments';
 import { usePostHog } from '@/app/stores/posthog.store';
 import type { AgentSkill } from '../types';
+import { useSkillWorkflowNoteData } from '@/features/agents/composables/useSkillWorkflowNoteData';
+import {
+	getSkillWorkflowNotes,
+	type SkillWorkflowNote,
+} from '@/features/agents/utils/skillWorkflowNotes';
 import SkillWorkflowMentionPicker from './SkillWorkflowMentionPicker.vue';
 import SkillDiffCount from './skillVersions/SkillDiffCount.vue';
 import type { FileChange } from './skillVersions/skillVersionDiff';
@@ -25,6 +30,8 @@ const props = withDefaults(
 		changeCounts?: Record<string, FileChange>;
 		mentionProjectId?: string;
 		mentionProjectName?: string;
+		instanceSkill?: boolean;
+		availableToMcp?: boolean;
 	}>(),
 	{
 		addReferenceDisabled: false,
@@ -32,6 +39,8 @@ const props = withDefaults(
 		invalidPaths: () => [],
 		mentionProjectId: undefined,
 		mentionProjectName: undefined,
+		instanceSkill: false,
+		availableToMcp: false,
 	},
 );
 
@@ -55,6 +64,26 @@ const addWorkflowOpen = ref(false);
 const mentionedWorkflows = computed(() => parseAgentSkillWorkflowMentions(props.skill));
 const mentionedWorkflowIds = computed(() =>
 	mentionedWorkflows.value.map(({ workflowId }) => workflowId),
+);
+const { noteData } = useSkillWorkflowNoteData(mentionedWorkflowIds, workflowMentionsEnabled);
+const NOTE_TEXT_KEYS: Record<SkillWorkflowNote, BaseTextKey> = {
+	agentTrigger: 'agents.builder.skills.workflowMentions.note.agentTrigger',
+	mcpTrigger: 'agents.builder.skills.workflowMentions.note.mcpTrigger',
+	mcpUnavailable: 'agents.builder.skills.workflowMentions.note.mcpUnavailable',
+	unpublished: 'agents.builder.skills.workflowMentions.note.unpublished',
+	instanceAccess: 'agents.builder.skills.workflowMentions.note.instanceAccess',
+};
+const workflowRows = computed(() =>
+	mentionedWorkflows.value.map((workflow) => {
+		const data = noteData.value.get(workflow.workflowId);
+		const notes = data
+			? getSkillWorkflowNotes(data, {
+					instanceSkill: props.instanceSkill,
+					availableToMCP: props.availableToMcp,
+				}).map((note) => i18n.baseText(NOTE_TEXT_KEYS[note]))
+			: [];
+		return { ...workflow, notes };
+	}),
 );
 
 function isInvalid(path: string) {
@@ -210,13 +239,32 @@ function testIdForPath(path: string) {
 				{{ i18n.baseText('agents.builder.skills.workflowMentions.empty') }}
 			</N8nText>
 			<div
-				v-for="workflow in mentionedWorkflows"
+				v-for="workflow in workflowRows"
 				:key="workflow.workflowId"
 				:class="[$style.item, $style.workflow]"
 				data-testid="agent-skill-workflow-item"
 			>
 				<N8nIcon icon="workflow" :size="16" :class="$style.icon" />
-				<N8nText size="medium" :class="$style.path">{{ workflow.name }}</N8nText>
+				<N8nText size="medium" :class="[$style.path, $style.workflowName]">{{
+					workflow.name
+				}}</N8nText>
+				<N8nTooltip v-if="workflow.notes.length > 0" as-child placement="right">
+					<template #content>
+						<p v-for="note in workflow.notes" :key="note" :class="$style.note">
+							{{ note }}
+						</p>
+					</template>
+					<span
+						:class="$style.noteIcon"
+						tabindex="0"
+						role="img"
+						:aria-label="workflow.notes.join(' ')"
+						data-testid="agent-skill-workflow-notes"
+						data-attr="agent-skill-workflow-notes"
+					>
+						<N8nIcon icon="info" :size="16" />
+					</span>
+				</N8nTooltip>
 			</div>
 		</div>
 	</nav>
@@ -324,6 +372,29 @@ function testIdForPath(path: string) {
 
 	&:hover {
 		background: transparent;
+	}
+}
+
+.workflowName {
+	flex: 1;
+}
+
+.noteIcon {
+	display: inline-flex;
+	flex-shrink: 0;
+	color: var(--color--text--tint-1);
+
+	&:focus-visible {
+		outline: var(--focus--border-width) solid var(--focus--border-color);
+		border-radius: var(--border-radius-base);
+	}
+}
+
+.note {
+	margin: 0;
+
+	& + & {
+		margin-top: var(--spacing--2xs);
 	}
 }
 

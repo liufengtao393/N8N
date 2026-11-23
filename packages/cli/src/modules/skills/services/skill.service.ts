@@ -67,6 +67,7 @@ import {
 import { compareSkillFilePaths, skillContentHash } from '../utils/skill-content-hash';
 import { skillGroupPage } from '../utils/skill-group-page';
 import { getSkillHash } from '../utils/skill-hash';
+import { addedWorkflowMentionIds } from '../utils/skill-workflow-mentions';
 import { AssistantSkillsFlagGate } from './assistant-skills-flag-gate';
 import { SkillAccessService } from './skill-access.service';
 import { SkillRuntimeService } from './skill-runtime.service';
@@ -132,6 +133,9 @@ function toVersionSummary(
 		createdAt: version.createdAt.toISOString(),
 	};
 }
+
+const STALE_SKILL_MESSAGE =
+	'The skill was changed somewhere else. Reload to get the latest version.';
 
 /**
  * User actions on skills and the rules of every write: list, read, create, save, move and
@@ -396,6 +400,7 @@ export class SkillService {
 			throw new UserError("The n8n Assistant can't use skills on this instance.");
 		}
 		const target = await this.skillAccess.resolveCreateTarget(user, payload);
+		await this.skillAccess.assertCanReadMentionedWorkflows(user, payload.skill);
 		const input = {
 			checkNameTaken: true,
 			target,
@@ -449,6 +454,28 @@ export class SkillService {
 		const moves = target !== undefined && target.projectId !== skill.projectId;
 
 		const checkedSource = moves ? await this.skillAccess.assertCanMove(user, skillId) : undefined;
+
+		if (
+			addedWorkflowMentionIds({
+				instructions: update.instructions ?? '',
+				references: update.references,
+			}).length > 0
+		) {
+			const latest = (await this.findLatest([skillId])).get(skillId);
+			if (latest) {
+				if (getSkillHash(latest.skill) !== update.baseSkillHash) {
+					throw new ConflictError(STALE_SKILL_MESSAGE);
+				}
+				await this.skillAccess.assertCanReadMentionedWorkflows(
+					user,
+					{
+						instructions: update.instructions ?? latest.skill.instructions,
+						references: update.references ?? latest.skill.references,
+					},
+					latest.skill,
+				);
+			}
+		}
 
 		if (!moves && availableToAssistant === undefined && availableToMCP === undefined) {
 			const { followingAgentIds: _following, ...saved } = await this.saveTrusted(
@@ -627,9 +654,7 @@ export class SkillService {
 			// Only a new name is trimmed, so a save never renames a skill it did not rename.
 			if (changes.name !== undefined) changes.name = trimmedName(changes.name);
 			if (baseSkillHash !== getSkillHash(current)) {
-				throw new ConflictError(
-					'The skill was changed somewhere else. Reload to get the latest version.',
-				);
+				throw new ConflictError(STALE_SKILL_MESSAGE);
 			}
 			const skill: AgentSkill = { ...current, ...changes };
 			// Reads return files sorted by path. Sort here too, so the returned skill hashes the same
