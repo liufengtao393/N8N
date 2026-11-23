@@ -4,7 +4,11 @@ import * as path from 'node:path';
 import type { RuntimeBridge, BridgeConfig, ExecuteOptions, WorkflowData } from '../types';
 import { DEFAULT_BRIDGE_CONFIG, TimeoutError, MemoryLimitError } from '../types';
 import { readToAsciiCharmapJson } from '../extensions/to-ascii';
-import { TO_ASCII_CHARMAP_HOST_FUNCTION } from '../runtime/host-function-names';
+import { urlPathnameOfGuestValue } from '../extensions/url-pathname';
+import {
+	TO_ASCII_CHARMAP_HOST_FUNCTION,
+	URL_PATHNAME_HOST_FUNCTION,
+} from '../runtime/host-function-names';
 import type { ErrorSentinel } from '../runtime/lazy-proxy';
 import { unwrapTransferredValue } from '../runtime/transfer-codec';
 import { HostDataResolver } from './host-data-resolver';
@@ -173,8 +177,9 @@ export class IsolatedVmBridge implements RuntimeBridge {
 		// This allows code in isolate to access 'global.something'
 		await jail.set('global', jail.derefInto());
 
-		// The runtime bundle takes this function off the global object when it loads.
+		// The runtime bundle takes these functions off the global object when it loads.
 		await jail.set(TO_ASCII_CHARMAP_HOST_FUNCTION, new (getIvm().Callback)(readToAsciiCharmapJson));
+		await jail.set(URL_PATHNAME_HOST_FUNCTION, new (getIvm().Callback)(urlPathnameOfGuestValue));
 
 		// Load runtime bundle (DateTime, extend, SafeObject, proxy system)
 		await this.loadVendorLibraries();
@@ -277,6 +282,7 @@ export class IsolatedVmBridge implements RuntimeBridge {
 			const jail = this.context.global;
 			jail.setSync('global', jail.derefInto());
 			jail.setSync(TO_ASCII_CHARMAP_HOST_FUNCTION, new (getIvm().Callback)(readToAsciiCharmapJson));
+			jail.setSync(URL_PATHNAME_HOST_FUNCTION, new (getIvm().Callback)(urlPathnameOfGuestValue));
 
 			if (this.config.compileCache) {
 				const script = this.isolate.compileScriptSync(

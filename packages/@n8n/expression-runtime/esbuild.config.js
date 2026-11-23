@@ -29,6 +29,16 @@ const guestToAsciiPlugin = {
 	},
 };
 
+// The guest has no `URL`, so its `urlPathname` calls the host.
+const guestUrlPathnamePlugin = {
+	name: 'guest-url-pathname',
+	setup(build) {
+		build.onResolve({ filter: /\/url-pathname$/ }, () => ({
+			path: path.join(__dirname, 'src/runtime/url-pathname.ts'),
+		}));
+	},
+};
+
 async function build() {
 	const sharedOptions = {
 		entryPoints: [path.join(__dirname, 'src/runtime/index.ts')],
@@ -39,7 +49,7 @@ async function build() {
 		platform: 'neutral', // Works in both Node.js and browser
 		mainFields: ['module', 'main'], // Needed for neutral platform to resolve packages
 		external: [], // Bundle everything (lodash, luxon)
-		plugins: [guestToAsciiPlugin],
+		plugins: [guestToAsciiPlugin, guestUrlPathnamePlugin],
 	};
 
 	// IIFE bundle for isolated-vm

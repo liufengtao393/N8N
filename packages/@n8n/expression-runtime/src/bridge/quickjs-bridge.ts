@@ -19,7 +19,11 @@ import {
 import { ERROR_TYPE, isErrorTransferSentinel, rebuildErrorValue } from '../runtime/error-transfer';
 import { isLuxonSentinel, rebuildLuxonValue } from '../runtime/luxon-transfer';
 import { readToAsciiCharmapJson } from '../extensions/to-ascii';
-import { TO_ASCII_CHARMAP_HOST_FUNCTION } from '../runtime/host-function-names';
+import { urlPathnameOfGuestValue } from '../extensions/url-pathname';
+import {
+	TO_ASCII_CHARMAP_HOST_FUNCTION,
+	URL_PATHNAME_HOST_FUNCTION,
+} from '../runtime/host-function-names';
 import { isArrayIndexKey } from '../runtime/utils';
 import type { EscapedTransferValue } from '../runtime/transfer';
 import {
@@ -743,8 +747,9 @@ export class QuickJsBridge implements RuntimeBridge {
 		// Inject Intl polyfill — QuickJS doesn't include Intl, but Luxon needs it
 		this.injectIntlPolyfill();
 
-		// The runtime bundle takes this function off the global object when it loads.
+		// The runtime bundle takes these functions off the global object when it loads.
 		this.injectToAsciiCharmap();
+		this.injectUrlPathname();
 
 		// Load runtime bundle (DateTime, extend, SafeObject, proxy system, buildContext)
 		this.loadRuntimeBundle(runtimeBundle);
@@ -797,6 +802,22 @@ export class QuickJsBridge implements RuntimeBridge {
 		);
 		this.vm.setProp(this.vm.global, TO_ASCII_CHARMAP_HOST_FUNCTION, charmapFn);
 		this.hostFunctionHandles.push(charmapFn);
+	}
+
+	/** Gives the guest the host function that returns the path of a URL. */
+	private injectUrlPathname(): void {
+		if (!this.vm) {
+			throw new Error('Context not initialized');
+		}
+
+		const vm = this.vm;
+		const pathnameFn = vm.newFunction(URL_PATHNAME_HOST_FUNCTION, (valueHandle) =>
+			this.hostValueToQuickJSHandle(
+				urlPathnameOfGuestValue(this.dumpGuestArgument(vm, valueHandle)),
+			),
+		);
+		vm.setProp(vm.global, URL_PATHNAME_HOST_FUNCTION, pathnameFn);
+		this.hostFunctionHandles.push(pathnameFn);
 	}
 
 	/**
