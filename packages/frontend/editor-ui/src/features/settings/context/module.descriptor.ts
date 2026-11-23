@@ -70,5 +70,16 @@ export const ContextModule: FrontendModuleDescription = {
 			},
 			beforeEnter: () => useIsCollectionsEnabled().value || { name: VIEWS.HOMEPAGE },
 		},
+		{
+			path: 'collections/:collectionId',
+			name: VIEWS.KNOWLEDGE_COLLECTION,
+			props: true,
+			component: async () => await import('./views/CollectionView.vue'),
+			// The backend gates collections: with the flag off, the page's calls get 404.
+			meta: {
+				projectRoute: true,
+				middleware: ['authenticated'],
+			},
+		},
 	],
 };
