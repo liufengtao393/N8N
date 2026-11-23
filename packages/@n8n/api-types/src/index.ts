@@ -1163,6 +1163,7 @@ export {
 	AGENT_SAFE_TESTING_FLAG,
 	toolCallRouteSchema,
 	toolCallReasonSchema,
+	toolCallEvidenceSchema,
 	toolCallSimulationSchema,
 	agentChatModeSchema,
 	type AgentChatMode,
@@ -1172,6 +1173,7 @@ export {
 export type {
 	ToolCallRoute,
 	ToolCallReason,
+	ToolCallEvidence,
 	ToolCallSimulation,
 	ToolTestability,
 	ToolTestKind,
