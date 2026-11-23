@@ -1259,6 +1259,29 @@ describe('ProjectService', () => {
 				expect(credentialDelete).toHaveBeenCalledWith(user, 'credential-1', {}, ctx);
 			});
 
+			it('removes the execution limit as the caller', async () => {
+				const removeLimitOfDeletedProject = vi.fn();
+				Object.defineProperty(projectService, 'executionLimitsService', {
+					configurable: true,
+					get: async () => ({ removeLimitOfDeletedProject }),
+				});
+				moduleRegistry.isActive.mockImplementation(
+					(moduleName) => moduleName === 'execution-limits',
+				);
+				const ctx: OperationContext = {
+					security: mock<SecurityContext>({ subIdentityId: 'login-1' }),
+				};
+
+				await projectService.deleteProject(user, 'project-1', {}, ctx);
+
+				expect(removeLimitOfDeletedProject).toHaveBeenCalledWith(
+					'project-1',
+					user.id,
+					'login-1',
+					expect.anything(),
+				);
+			});
+
 			it('passes an empty operation context when none is given', async () => {
 				await projectService.deleteProject(user, 'project-1');
 
