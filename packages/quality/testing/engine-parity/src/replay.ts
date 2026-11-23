@@ -25,7 +25,7 @@ async function main(file: string | undefined): Promise<number> {
 	}
 	const repro = readRepro(resolve(process.env.INIT_CWD ?? process.cwd(), file));
 	const parityCase = reproCase(repro);
-	const rules = ruleSets[repro.rules] ?? ruleSets.smoke;
+	const rules = ruleSets[repro.rules] ?? ruleSets.full;
 	const runners = { v1: new V1Runner(), v2: new V2Runner() };
 
 	await startExpressionEngine();

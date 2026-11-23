@@ -72,7 +72,7 @@ describe('grammar', () => {
 	});
 
 	it('makes cases that the SDK can print as code', () => {
-		for (const parityCase of sample('multiTrigger', 3, 20)) {
+		for (const parityCase of sample('full', 3, 20)) {
 			expect(toSdkCode(parityCase.ir)).toContain("workflow('parity'");
 		}
 	});
