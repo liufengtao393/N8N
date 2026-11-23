@@ -6,6 +6,7 @@ import type { PolicyViolation } from '@n8n/decorators';
 import { mock } from 'vitest-mock-extended';
 
 import type { NodeTypesProxy } from '@n8n/backend-services';
+import type { WorkflowsInSkillsFlagGate } from '@/modules/skills';
 import type { AiGatewayService } from '@/services/ai-gateway.service';
 
 import type { AgentSkillsService } from '../agent-skills.service';
@@ -86,6 +87,7 @@ function makeService() {
 	const aiGatewayService = mock<AiGatewayService>();
 	const agentPolicyService = mock<AgentPolicyService>();
 	agentPolicyService.evaluatePublish.mockResolvedValue({ violations: [] });
+	const workflowsInSkillsFlagGate = mock<WorkflowsInSkillsFlagGate>();
 	return {
 		service: new AgentValidationService(
 			agentRepository,
@@ -103,6 +105,7 @@ function makeService() {
 			aiGatewayService,
 			skillRefs,
 			agentPolicyService,
+			workflowsInSkillsFlagGate,
 		),
 		skillRefs,
 		agentRepository,
@@ -114,6 +117,7 @@ function makeService() {
 		chatIntegrationRegistry,
 		aiGatewayService,
 		agentPolicyService,
+		workflowsInSkillsFlagGate,
 	};
 }
 
@@ -1652,6 +1656,129 @@ describe('AgentValidationService — structured issues', () => {
 			],
 		});
 		expect(runtimeResult).toEqual({ missing: [] });
+	});
+
+	describe('workflows that skills mention', () => {
+		function mentionSetup({ flag = true, tools = [] as AgentJsonConfig['tools'] } = {}) {
+			const setup = makeService();
+			setup.workflowsInSkillsFlagGate.isEnabled.mockResolvedValue(flag);
+			setup.skillRefs.bodies.lucky = {
+				name: 'Lucky code',
+				description: 'Returns a code',
+				instructions: 'Call [Get code](n8n://workflow/wf-mentioned).',
+			};
+			setup.agentRepository.findByIdAndProjectId.mockResolvedValue(
+				makeAgent({ ...runnableConfig, tools, skills: [{ type: 'skill', id: 'lucky' }] }),
+			);
+			return setup;
+		}
+
+		const draftWorkflow = {
+			id: 'wf-mentioned',
+			name: 'Get code',
+			activeVersionId: null,
+			nodes: [executeWorkflowTriggerNode],
+		};
+		const credentials = makeCredentialProvider([{ id: 'openai-main', type: 'openAiApi' }]);
+
+		it('blocks publish when a mentioned workflow is not published, but not a run', async () => {
+			const { service, workflowRepository } = mentionSetup();
+			workflowRepository.findManyByAgentToolReferences.mockResolvedValue([draftWorkflow] as never);
+
+			const publishResult = await service.validateAgentConfiguration(
+				agentId,
+				projectId,
+				credentials,
+				'publish',
+			);
+			const runtimeResult = await service.validateAgentIsRunnable(agentId, projectId, credentials);
+
+			expect(publishResult).toEqual({
+				status: 'invalid',
+				issues: [
+					{
+						code: 'incompatible_reference',
+						path: 'skills.lucky.workflows.wf-mentioned',
+						capability: { kind: 'tool', id: 'Get code', toolType: 'workflow' },
+						reason: 'not_published',
+					},
+				],
+			});
+			expect(runtimeResult).toEqual({ missing: [] });
+		});
+
+		it('blocks publish when a mentioned workflow is not found, but not a run', async () => {
+			const { service } = mentionSetup();
+
+			const publishResult = await service.validateAgentConfiguration(
+				agentId,
+				projectId,
+				credentials,
+				'publish',
+			);
+			const runtimeResult = await service.validateAgentIsRunnable(agentId, projectId, credentials);
+
+			expect(publishResult.issues).toEqual([
+				{
+					code: 'missing_reference',
+					path: 'skills.lucky.workflows.wf-mentioned',
+					capability: { kind: 'tool', id: 'Get code', toolType: 'workflow' },
+				},
+			]);
+			expect(runtimeResult).toEqual({ missing: [] });
+		});
+
+		it('does not report a published mentioned workflow without a supported trigger', async () => {
+			const { service, workflowRepository } = mentionSetup();
+			workflowRepository.findManyByAgentToolReferences.mockResolvedValue([
+				{ ...draftWorkflow, activeVersionId: 'version-1', nodes: [] },
+			] as never);
+
+			const result = await service.validateAgentConfiguration(agentId, projectId, credentials);
+
+			expect(result.status).toBe('valid');
+		});
+
+		it('reports a workflow that a legacy direct tool attaches by name only on that tool', async () => {
+			const { service, workflowRepository } = mentionSetup({
+				tools: [{ type: 'workflow', workflow: 'Get code' }],
+			});
+			workflowRepository.findManyByAgentToolReferences.mockResolvedValue([draftWorkflow] as never);
+
+			const result = await service.validateAgentConfiguration(agentId, projectId, credentials);
+
+			expect(result.issues.map((item) => item.path)).toEqual(['tools.0.workflow']);
+		});
+
+		it('reports no issue for a workflow that a disabled legacy direct tool attaches', async () => {
+			const { service, workflowRepository } = mentionSetup({
+				tools: [{ type: 'workflow', workflow: 'Get code', enabled: false }],
+			});
+			workflowRepository.findManyByAgentToolReferences.mockResolvedValue([draftWorkflow] as never);
+
+			const result = await service.validateAgentConfiguration(agentId, projectId, credentials);
+
+			expect(result.issues).toEqual([]);
+		});
+
+		it('reports a workflow that is also attached directly only on the direct tool', async () => {
+			const { service, workflowRepository } = mentionSetup({
+				tools: [{ type: 'workflow', workflowId: 'wf-mentioned', workflow: 'Get code' }],
+			});
+			workflowRepository.findManyByAgentToolReferences.mockResolvedValue([draftWorkflow] as never);
+
+			const result = await service.validateAgentConfiguration(agentId, projectId, credentials);
+
+			expect(result.issues.map((item) => item.path)).toEqual(['tools.0.workflowId']);
+		});
+
+		it('ignores mentions while the flag is off', async () => {
+			const { service } = mentionSetup({ flag: false });
+
+			const result = await service.validateAgentConfiguration(agentId, projectId, credentials);
+
+			expect(result.status).toBe('valid');
+		});
 	});
 
 	it('loaded-agent full validation loads tasks but does not refetch the agent, flagging missing task bodies regardless of enabled state', async () => {
