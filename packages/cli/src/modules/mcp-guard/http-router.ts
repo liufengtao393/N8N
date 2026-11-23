@@ -78,7 +78,7 @@ export class HttpGuardRouter {
 
 		this.deps.context.origin = `${req.url.protocol}//${req.url.host}`;
 		if (req.headers.authorization) this.deps.context.authorization = req.headers.authorization;
-		const readShaped = isReadShaped(req, vendor.readPaths);
+		const readShaped = !this.deps.profile.gymOnly && isReadShaped(req, vendor.readPaths);
 		const { name, args } = toToolCall(req, readShaped);
 		return readShaped ? await this.read(name, args) : await this.write(name, args);
 	}
