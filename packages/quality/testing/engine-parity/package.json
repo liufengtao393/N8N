@@ -19,6 +19,7 @@
   "dependencies": {
     "@n8n/engine": "workspace:*",
     "@n8n/node-engine-compatibility": "workspace:*",
+    "@n8n/utils": "workspace:*",
     "@n8n/workflow-engine-check": "workspace:*",
     "@n8n/workflow-sdk": "workspace:*",
     "@testcontainers/postgresql": "catalog:",

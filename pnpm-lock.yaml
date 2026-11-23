@@ -817,7 +817,7 @@ catalogs:
       version: 11.1.1
     vite:
       specifier: ^8.1.6
-      version: 8.3.7
+      version: 8.3.4
     vite-plugin-singlefile:
       specifier: 2.3.3
       version: 2.3.3
@@ -9904,6 +9904,9 @@ importers:
       '@n8n/node-engine-compatibility':
         specifier: workspace:*
         version: link:../../../@n8n/node-engine-compatibility
+      '@n8n/utils':
+        specifier: workspace:*
+        version: link:../../../@n8n/utils
       '@n8n/workflow-engine-check':
         specifier: workspace:*
         version: link:../../../@n8n/workflow-engine-check
