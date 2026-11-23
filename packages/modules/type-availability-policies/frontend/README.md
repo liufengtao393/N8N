@@ -10,7 +10,10 @@ The descriptor `id` must match the backend module id
 The module is license-gated on `feat:typeAvailabilityPolicies` and is a default module. The policy
 pages under Settings > Security stay hidden until
 `N8N_ENV_FEAT_NODE_AND_CREDENTIAL_POLICIES_SETTINGS=true`. The shell checks this flag in
-`useTypePoliciesSettingsFlag`, because a module cannot import `useEnvFeatureFlag`.
+`useTypePoliciesSettingsFlag`, because a module cannot import `useEnvFeatureFlag`. The project
+policy parts (the Projects section and the project policy page) also need
+`N8N_ENV_FEAT_NODE_AND_CREDENTIAL_PROJECT_POLICIES=true` on the server. The module reads it in
+`useProjectPoliciesFlag` from the flags that `/rest/settings` sends.
 
 `useTypeAvailabilityPoliciesStore` answers whether a project may use a node type or a credential
 type. The store is passive: it does not watch the route, because the projects store lives in the
@@ -43,6 +46,12 @@ A 409 with no new version means the server refuses to edit the policy in place, 
 several attached documents or shares one. The save returns `notEditable`, the page says so once,
 and the store sets `notEditable` for that kind. Later saves of that kind are not sent until a load
 finds a newer version.
+
+The landing page lists the team projects from `GET /project-policies` through
+`useProjectPolicies()`. Each entry covers both kinds, so a project policy is one card. "Add project
+policy" calls `POST /project-policies`, which gives the project both kinds in one write. A 409
+means another admin added the policy first: the dialog keeps its error and the page reads the list
+again. If the list read fails, the page shows the Global section only.
 
 ```bash
 pnpm turbo typecheck lint test --filter=@n8n/frontend-module-type-availability-policies
