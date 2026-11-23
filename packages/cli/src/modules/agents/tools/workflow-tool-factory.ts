@@ -189,6 +189,12 @@ export interface WorkflowToolContext {
 	previewChat?: boolean;
 	publishedN8nChat?: boolean;
 	userId?: string;
+	/**
+	 * Set only for an interactive user. A guardrail check calls it before the
+	 * workflow runs. Published and integration runs leave it unset and keep the
+	 * project-scoped trust boundary.
+	 */
+	canExecuteWorkflow?: (workflowId: string) => Promise<boolean>;
 	/** See `RelatedAgentRun.agentServiceAccountId`. */
 	agentServiceAccountId?: string;
 	/** See `RelatedAgentRun.delegatingAgentId`. */
@@ -206,6 +212,10 @@ export interface WorkflowToolRunContext extends WorkflowToolContext {
 	abortSignal?: AbortSignal;
 	/** Stamped onto sub-executions so a Wait node finishing can wake this run. */
 	agentRun?: RelatedAgentRun;
+	/** Per-call execution budget. Defaults to {@link DEFAULT_TIMEOUT_MS}. */
+	timeoutMs?: number;
+	/** Stamped onto the execution's `resultData.metadata` at creation. */
+	executionMetadata?: Record<string, string>;
 }
 
 type WorkflowToolInputsConfig = NonNullable<
@@ -337,7 +347,11 @@ export async function executeWorkflow(
 		executionData: createRunExecutionData({
 			...(context.agentRun ? { parentAgentRun: context.agentRun } : {}),
 			startData: {},
-			resultData: { pinData: triggerPinData, runData: {} },
+			resultData: {
+				pinData: triggerPinData,
+				runData: {},
+				...(context.executionMetadata !== undefined && { metadata: context.executionMetadata }),
+			},
 			executionData: {
 				contextData: {},
 				metadata: {},
@@ -382,7 +396,7 @@ export async function executeWorkflow(
 
 	return await withWorkflowCancellation(executionId, workflow.id, context.abortSignal, async () => {
 		// Wait for completion with timeout protection
-		const timeoutMs = DEFAULT_TIMEOUT_MS;
+		const timeoutMs = context.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
 		let completedRun: IRun | undefined;
 		if (activeExecutions.has(executionId)) {
