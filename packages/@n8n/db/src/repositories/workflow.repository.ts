@@ -29,6 +29,7 @@ import {
 	WorkflowDependency,
 	WORKFLOW_DEPENDENCY_INDEX_VERSION,
 	User,
+	Project,
 } from '../entities';
 import { SharedWorkflow } from '../entities/shared-workflow';
 import type {
@@ -1520,6 +1521,7 @@ export class WorkflowRepository extends BaseRepository<WorkflowEntity> {
 
 		this.applyFilters(qb, filtersToApply);
 		this.applyTriggerNodeTypesFilter(qb, options.filter?.triggerNodeTypes as string[] | undefined);
+		this.applyPersonalProjectsOfOthersFilter(qb, user, options.filter);
 		this.applyWorkflowIdsInFilter(qb, options.workflowIdsIn);
 		this.applySelect(qb, options.select);
 		this.applyRelations(qb, options.select);
@@ -1527,6 +1529,28 @@ export class WorkflowRepository extends BaseRepository<WorkflowEntity> {
 		this.applyPagination(qb, options);
 
 		return qb;
+	}
+
+	private applyPersonalProjectsOfOthersFilter(
+		qb: SelectQueryBuilder<WorkflowEntity>,
+		user: User,
+		filter: WorkflowListQueryOptions['filter'],
+	): void {
+		if (filter?.excludePersonalProjectsOfOthers !== true) return;
+
+		const homeSubquery = this.manager
+			.createQueryBuilder()
+			.select('homeShare.workflowId')
+			.from(SharedWorkflow, 'homeShare')
+			.innerJoin(Project, 'homeProject', 'homeProject.id = homeShare.projectId')
+			.where('homeShare.role = :homeShareRole')
+			.andWhere('(homeProject.type = :homeTeamType OR homeProject.creatorId = :homeUserId)');
+
+		qb.andWhere(`workflow.id IN (${homeSubquery.getQuery()})`, {
+			homeShareRole: 'workflow:owner',
+			homeTeamType: 'team',
+			homeUserId: user.id,
+		});
 	}
 
 	/**

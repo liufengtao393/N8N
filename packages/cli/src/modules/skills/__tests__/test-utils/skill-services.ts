@@ -112,7 +112,7 @@ export function createSkillServices() {
 		workflows,
 		workflowsInSkillsGate,
 	);
-	const runtime = new SkillRuntimeService(skills, projectScope, access);
+	const runtime = new SkillRuntimeService(skills, projectScope, access, workflowsInSkillsGate);
 	const service = new SkillService(
 		logger,
 		skills,

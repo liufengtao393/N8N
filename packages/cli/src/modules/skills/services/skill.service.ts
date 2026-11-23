@@ -343,13 +343,20 @@ export class SkillService {
 			availableToMCP: true,
 		});
 		const rows = await this.skillRepository.findLatestSaved(page.skills.map((skill) => skill.id));
+		const contents = page.skills.flatMap((skill) => {
+			const row = rows.get(skill.id);
+			return row ? [toMcpSkillContent(row)] : [];
+		});
 		return {
 			count: page.count,
-			skills: page.skills.flatMap((skill) => {
-				const row = rows.get(skill.id);
-				return row ? [toMcpSkillContent(row)] : [];
-			}),
+			skills: await Promise.all(
+				contents.map(async (content) => await this.withMentionHint(content)),
+			),
 		};
+	}
+
+	private async withMentionHint(content: McpSkillContent): Promise<McpSkillContent> {
+		return { ...content, skill: await this.skillRuntime.withWorkflowMentionHint(content.skill) };
 	}
 
 	/** The latest saved version of a project or instance skill, for the MCP skills extension. */
@@ -362,7 +369,7 @@ export class SkillService {
 		) {
 			return null;
 		}
-		const content = toMcpSkillContent(row);
+		const content = await this.withMentionHint(toMcpSkillContent(row));
 		// The origin is only for telemetry: a failed lookup must not break the read.
 		const synced = await this.sourceRepository.findSyncedFrom(skillId).catch((error: unknown) => {
 			this.logger.warn('Could not find the source of a synced skill', {
