@@ -161,10 +161,23 @@ describe('Instance AI skills', () => {
 		expect(skill?.instructions).not.toContain('additionalInstructions');
 	});
 
+	it('recommends the app builder only for the apps tool group', async () => {
+		const skill = await loadInstanceAiSkills().loadSkill('app-builder');
+
+		// A broad group such as `tools` would suggest the skill for requests that are not about apps.
+		expect(skill?.recommendedToolGroups).toEqual(['apps']);
+	});
+
+	it('tells workflows where to read the app visitor', async () => {
+		const skill = await loadInstanceAiSkills().loadSkill('app-builder');
+
+		expect(skill?.instructions).toContain("$execution.customData.get('appVisitor')");
+	});
+
 	it('opens a newly created app before editing its files', async () => {
 		const skill = await loadInstanceAiSkills().loadSkill('app-builder');
 
-		expect(skill?.instructions).toContain('`action: "open"` and the returned `app.id`');
+		expect(skill?.instructions).toContain('call `open_app` with the returned `app.id`');
 	});
 
 	it('builds the layout of a new app before it creates resources', async () => {
