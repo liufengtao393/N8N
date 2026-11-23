@@ -44,6 +44,13 @@ function build(nodes: IrNode[], edges: IrWorkflow['edges'], items: IrItem[]): Pa
 	});
 }
 
+const loopNode: IrNode = {
+	key: 'Loop',
+	catalogId: 'splitInBatches',
+	params: { batchSize: 1, options: {} },
+	via: 'loop',
+};
+
 export const handWrittenCases: Record<string, ParityCase> = {
 	'linear pipeline with references': build(
 		[
@@ -115,5 +122,16 @@ export const handWrittenCases: Record<string, ParityCase> = {
 			{ from: 'Small', out: 0, to: 'Join', in: 1 },
 		],
 		[{ json: { n: 0 } }, { json: { n: 2 } }, { json: { n: 3 } }],
+	),
+
+	'loop over items': build(
+		[loopNode, set('Body', { pass: '={{ $runIndex }}' }), set('After', { ran: 'yes' })],
+		[
+			{ from: 'Trigger', out: 0, to: 'Loop', in: 0 },
+			{ from: 'Loop', out: 1, to: 'Body', in: 0 },
+			{ from: 'Body', out: 0, to: 'Loop', in: 0 },
+			{ from: 'Loop', out: 0, to: 'After', in: 0 },
+		],
+		[{ json: { n: 1 } }, { json: { n: 2 } }, { json: { n: 3 } }],
 	),
 };
