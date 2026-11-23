@@ -6,6 +6,9 @@ import { Config, Env, Nested } from '../decorators';
 const dbLoggingOptionsSchema = z.enum(['query', 'error', 'schema', 'warn', 'info', 'log', 'all']);
 type DbLoggingOptions = z.infer<typeof dbLoggingOptionsSchema>;
 
+const postgresSessionSettingsModeSchema = z.enum(['per-query', 'per-connection']);
+type PostgresSessionSettingsMode = z.infer<typeof postgresSessionSettingsModeSchema>;
+
 const DEFAULT_STATEMENT_TIMEOUT_MS = 5 * Time.minutes.toMilliseconds;
 
 @Config
@@ -101,6 +104,14 @@ class PostgresConfig {
 	/** Maximum time in milliseconds for a single query. Queries exceeding this are cancelled. Set to 0 to disable. */
 	@Env('DB_POSTGRESDB_STATEMENT_TIMEOUT')
 	statementTimeoutMs: number = DEFAULT_STATEMENT_TIMEOUT_MS;
+
+	/**
+	 * When n8n sends Postgres session settings (`search_path` and `statement_timeout`).
+	 * One of `per-query`, `per-connection`.
+	 * Set to `per-connection` to send them once for each pooled connection instead of before every query; behind a pooler in transaction mode, such as PgBouncer, first set them as defaults on the database role and reconnect the pooler.
+	 */
+	@Env('DB_POSTGRESDB_SESSION_SETTINGS_MODE', postgresSessionSettingsModeSchema)
+	sessionSettingsMode: PostgresSessionSettingsMode = 'per-query';
 
 	/** Maximum lifetime in milliseconds of a pooled Postgres connection before it is recycled. Set to 0 to disable. */
 	@Env('DB_POSTGRESDB_MAX_CONNECTION_LIFETIME_MS')
