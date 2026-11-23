@@ -44,6 +44,25 @@ describe('HttpRunRegistry', () => {
 		);
 	});
 
+	it('asks the gym for the service name of the profile when it differs from the file name', async () => {
+		const { admin } = setup();
+		const registry = new HttpRunRegistry({
+			profile: { ...GMAIL_PROFILE, gymService: 'google-gmail' },
+			vendor: loadVendorKnowledge('gmail'),
+			admin: admin as unknown as GymAdmin,
+			gymUrl: 'http://127.0.0.1:8083',
+		});
+
+		await registry.getOrCreate('agent-x', model);
+
+		expect(admin.issueMcpCredential).toHaveBeenCalledWith(
+			'guard-agent-x',
+			'google-gmail',
+			'google_oauth',
+			'oauthTokenData.access_token',
+		);
+	});
+
 	it('reuses the run of the same chat and makes a new one for another chat', async () => {
 		const { registry, admin } = setup();
 
@@ -136,5 +155,23 @@ describe('HttpRunRegistry', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('uses one tenant for the vendors of the same chat, and seeds and signs in each of them', async () => {
+		const { registry, admin } = setup();
+		const other = new HttpRunRegistry({
+			profile: { ...GMAIL_PROFILE, name: 'other' },
+			vendor: loadVendorKnowledge('gmail'),
+			admin: admin as unknown as GymAdmin,
+			gymUrl: 'http://127.0.0.1:8083',
+		});
+
+		const a = await registry.getOrCreate('agent-a-chat-1', model);
+		const b = await other.getOrCreate('agent-a-chat-1', model);
+
+		expect(a.tenant).toBe('guard-agent-a-chat-1');
+		expect(b.tenant).toBe('guard-agent-a-chat-1');
+		expect(admin.seed).toHaveBeenCalledTimes(2);
+		expect(admin.issueMcpCredential).toHaveBeenCalledTimes(2);
 	});
 });
