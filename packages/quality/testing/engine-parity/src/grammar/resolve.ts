@@ -21,6 +21,7 @@ function isCodeSpec(value: unknown): value is CodeSpec {
 
 export interface ResolveContext {
 	scope: ExprScope;
+	subWorkflowId?: string;
 }
 
 /** Fills the holes of a parameter draft. See `ParamDraft` in `catalog/types.ts`. */
@@ -42,6 +43,9 @@ export function resolveDraft(value: unknown, ctx: ResolveContext): unknown {
 	}
 	if ('$code' in value && isCodeSpec(value.$code)) {
 		return renderCode(value.$code, ctx.scope);
+	}
+	if ('$subWorkflowId' in value) {
+		return ctx.subWorkflowId ?? 'missing-sub-workflow';
 	}
 
 	return Object.fromEntries(

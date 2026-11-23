@@ -35,13 +35,14 @@ describe('grammar', () => {
 		expect(second).toEqual(first);
 	});
 
-	it.each(['smoke', 'branching', 'loops', 'code'])(
+	it.each(['smoke', 'branching', 'loops', 'code', 'subWorkflows'])(
 		'makes eligible workflows with valid ports for the "%s" rule set',
 		(name) => {
 			const cases = sample(name);
-			const eligible = cases.filter(
-				(parityCase) => checkEngineV2Eligibility(parityCase.workflow).eligible,
-			);
+			const eligible = cases.filter((parityCase) => {
+				const workflows = [parityCase.workflow, ...Object.values(parityCase.subWorkflows)];
+				return workflows.every((workflow) => checkEngineV2Eligibility(workflow).eligible);
+			});
 
 			expect(cases.every(portsInRange)).toBe(true);
 			expect(eligible.length / cases.length).toBeGreaterThanOrEqual(0.95);
@@ -71,8 +72,23 @@ describe('grammar', () => {
 	});
 
 	it('makes cases that the SDK can print as code', () => {
-		for (const parityCase of sample('code', 3, 20)) {
+		for (const parityCase of sample('subWorkflows', 3, 20)) {
 			expect(toSdkCode(parityCase.ir)).toContain("workflow('parity'");
+		}
+	});
+
+	it('gives each Execute Workflow node its own sub-workflow', () => {
+		const cases = sample('subWorkflows').filter((parityCase) =>
+			parityCase.ir.nodes.some((irNode) => irNode.catalogId === 'executeWorkflow'),
+		);
+
+		expect(cases.length).toBeGreaterThan(0);
+		for (const parityCase of cases) {
+			for (const irNode of parityCase.ir.nodes.filter(
+				(node) => node.catalogId === 'executeWorkflow',
+			)) {
+				expect(parityCase.subWorkflows[String(irNode.params.workflowId)]).toBeDefined();
+			}
 		}
 	});
 });
