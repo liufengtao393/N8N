@@ -565,6 +565,7 @@ export {
 	InstanceAiEventsQuery,
 	InstanceAiCorrectTaskRequest,
 	InstanceAiCloudBrowserReturnControlRequest,
+	type InstanceAiCloudBrowserReturnControlResponse,
 	InstanceAiEnsureThreadRequest,
 	InstanceAiPersistPendingAgentRequest,
 	instanceAiAgentAttachmentSchema,
