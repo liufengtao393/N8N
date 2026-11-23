@@ -24,21 +24,28 @@ function portsInRange({ ir }: ParityCase): boolean {
 
 describe('grammar', () => {
 	it('gives the same workflow JSON for the same seed', () => {
-		const first = sample('smoke', 7, 20).map((parityCase) => JSON.stringify(parityCase.workflow));
-		const second = sample('smoke', 7, 20).map((parityCase) => JSON.stringify(parityCase.workflow));
+		const first = sample('branching', 7, 20).map((parityCase) =>
+			JSON.stringify(parityCase.workflow),
+		);
+		const second = sample('branching', 7, 20).map((parityCase) =>
+			JSON.stringify(parityCase.workflow),
+		);
 
 		expect(second).toEqual(first);
 	});
 
-	it.each(['smoke'])('makes eligible workflows with valid ports for the "%s" rule set', (name) => {
-		const cases = sample(name);
-		const eligible = cases.filter(
-			(parityCase) => checkEngineV2Eligibility(parityCase.workflow).eligible,
-		);
+	it.each(['smoke', 'branching'])(
+		'makes eligible workflows with valid ports for the "%s" rule set',
+		(name) => {
+			const cases = sample(name);
+			const eligible = cases.filter(
+				(parityCase) => checkEngineV2Eligibility(parityCase.workflow).eligible,
+			);
 
-		expect(cases.every(portsInRange)).toBe(true);
-		expect(eligible.length / cases.length).toBeGreaterThanOrEqual(0.95);
-	});
+			expect(cases.every(portsInRange)).toBe(true);
+			expect(eligible.length / cases.length).toBeGreaterThanOrEqual(0.95);
+		},
+	);
 
 	it('keeps each case within the node limit', () => {
 		const { limits } = ruleSets.smoke;
@@ -63,7 +70,7 @@ describe('grammar', () => {
 	});
 
 	it('makes cases that the SDK can print as code', () => {
-		for (const parityCase of sample('smoke', 3, 20)) {
+		for (const parityCase of sample('branching', 3, 20)) {
 			expect(toSdkCode(parityCase.ir)).toContain("workflow('parity'");
 		}
 	});
