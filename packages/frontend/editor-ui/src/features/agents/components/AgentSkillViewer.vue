@@ -1,26 +1,26 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import {
 	AGENT_SKILL_DESCRIPTION_MAX_LENGTH,
 	AGENT_SKILL_INSTRUCTIONS_MAX_LENGTH,
 	AGENT_SKILL_REFERENCE_CONTENT_MAX_LENGTH,
 	AGENT_SKILL_REFERENCE_MAX_COUNT,
 	AGENT_SKILL_REFERENCES_TOTAL_MAX_LENGTH,
+	replaceSkillWorkflowMentionUrls,
 } from '@n8n/api-types';
-import {
-	N8nFormInput,
-	N8nInputLabel,
-	N8nMarkdown,
-	N8nMarkdownEditor,
-	N8nText,
-} from '@n8n/design-system';
+import { N8nFormInput, N8nInputLabel, N8nMarkdown, N8nText } from '@n8n/design-system';
 import type { IValidator, Validatable } from '@n8n/design-system';
 import { useI18n, type BaseTextKey } from '@n8n/i18n';
 import { useTelemetry } from '@n8n/composables/useTelemetry';
 import { TELEMETRY_EVENT } from '@n8n/telemetry';
 
 import type { Rule, RuleGroup } from '@/Interface';
+import { VIEWS } from '@/app/constants';
+import { WORKFLOWS_IN_SKILLS_EXPERIMENT } from '@/app/constants/experiments';
+import { usePostHog } from '@/app/stores/posthog.store';
 import type { AgentSkill, AgentSkillReference } from '../types';
+import AgentSkillMarkdownEditor from './AgentSkillMarkdownEditor.vue';
 import AgentSkillMermaidDiagram from './AgentSkillMermaidDiagram.vue';
 import type { SkillMermaidResult } from './skillMermaidRenderer';
 
@@ -37,12 +37,16 @@ const props = withDefaults(
 		errors?: Partial<Record<keyof AgentSkill, string>>;
 		selectedPath?: string;
 		showValidationWarnings?: boolean;
+		mentionProjectId?: string;
+		mentionProjectName?: string;
 	}>(),
 	{
 		disabled: false,
 		readOnly: false,
 		selectedPath: SKILL_FILE,
 		showValidationWarnings: false,
+		mentionProjectId: undefined,
+		mentionProjectName: undefined,
 	},
 );
 
@@ -54,6 +58,14 @@ const emit = defineEmits<{
 
 const i18n = useI18n();
 const telemetry = useTelemetry();
+const router = useRouter();
+const posthog = usePostHog();
+const workflowMentionsEnabled = computed(() =>
+	posthog.isVariantEnabled(
+		WORKFLOWS_IN_SKILLS_EXPERIMENT.name,
+		WORKFLOWS_IN_SKILLS_EXPERIMENT.variant,
+	),
+);
 const description = ref(props.skill.description);
 const referenceFileName = ref('');
 const formValidation = reactive({
@@ -135,6 +147,16 @@ const isSkillFileSelected = computed(() => props.selectedPath === SKILL_FILE);
 const selectedReference = computed(() =>
 	(props.skill.references ?? []).find((reference) => reference.path === props.selectedPath),
 );
+const readOnlyContent = computed(() => {
+	const content = isSkillFileSelected.value
+		? props.skill.instructions
+		: (selectedReference.value?.content ?? '');
+	if (!workflowMentionsEnabled.value) return content;
+	return replaceSkillWorkflowMentionUrls(
+		content,
+		(workflowId) => router.resolve({ name: VIEWS.WORKFLOW, params: { workflowId } }).href,
+	);
+});
 const selectedReferenceCharacterCount = computed(() =>
 	i18n.baseText('agents.builder.skills.references.characterCount' as BaseTextKey, {
 		interpolate: {
@@ -350,9 +372,9 @@ function onDiagramRenderEnd(outcome: SkillMermaidResult['outcome']) {
 				color="text-light"
 			>
 				<N8nMarkdown
-					:class="$style.readOnlyMarkdown"
+					:class="[$style.readOnlyMarkdown, workflowMentionsEnabled && $style.workflowChips]"
 					:options="READ_ONLY_MARKDOWN_OPTIONS"
-					:content="isSkillFileSelected ? props.skill.instructions : selectedReference?.content"
+					:content="readOnlyContent"
 					:data-testid="
 						isSkillFileSelected ? 'agent-skill-instructions-text' : 'agent-skill-reference-text'
 					"
@@ -410,13 +432,15 @@ function onDiagramRenderEnd(outcome: SkillMermaidResult['outcome']) {
 					:required="true"
 					size="small"
 				>
-					<N8nMarkdownEditor
+					<AgentSkillMarkdownEditor
 						:class="$style.editor"
 						:container-class="$style.resizable"
 						:model-value="props.skill.instructions ?? ''"
 						:placeholder="i18n.baseText('agents.builder.skills.instructions.placeholder')"
 						show-toolbar="floating"
 						:disabled="props.disabled"
+						:mention-project-id="props.mentionProjectId"
+						:mention-project-name="props.mentionProjectName"
 						max-height="none"
 						data-testid="agent-skill-instructions-editor"
 						@update:model-value="onInstructionsInput"
@@ -461,12 +485,14 @@ function onDiagramRenderEnd(outcome: SkillMermaidResult['outcome']) {
 				:required="true"
 				size="small"
 			>
-				<N8nMarkdownEditor
+				<AgentSkillMarkdownEditor
 					:class="[$style.editor, $style.referenceEditor]"
 					:model-value="selectedReference.content"
 					:placeholder="i18n.baseText('agents.builder.skills.references.content.placeholder')"
 					show-toolbar="floating"
 					:disabled="props.disabled"
+					:mention-project-id="props.mentionProjectId"
+					:mention-project-name="props.mentionProjectName"
 					max-height="none"
 					data-testid="agent-skill-reference-editor"
 					@update:model-value="onReferenceInput"
@@ -488,6 +514,8 @@ function onDiagramRenderEnd(outcome: SkillMermaidResult['outcome']) {
 </template>
 
 <style lang="scss" module>
+@use './workflowMentionChip' as *;
+
 .panel {
 	display: flex;
 	flex-direction: column;
@@ -542,6 +570,10 @@ function onDiagramRenderEnd(outcome: SkillMermaidResult['outcome']) {
 		display: inline;
 		line-height: inherit;
 	}
+}
+
+.workflowChips :global(a[href*='/workflow/']) {
+	@include workflow-mention-chip;
 }
 
 .codeBlock {
