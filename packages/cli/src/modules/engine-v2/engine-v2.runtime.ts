@@ -16,6 +16,7 @@ import {
 	mintApprovalCallback,
 	mintResumeToken,
 	mintStepBoundResumeToken,
+	runMigrations,
 	SharedSecretIdentityVerifier,
 } from '@n8n/engine';
 import type { AdditionalDataContext, V1StepExecutorDeps } from '@n8n/node-engine-compatibility';
@@ -126,7 +127,7 @@ export class EngineV2Runtime {
 			connectTimeoutMS: databaseConnectionTimeoutMs,
 		});
 		await this.dataSource.initialize();
-		await this.dataSource.runMigrations();
+		await runMigrations(this.dataSource);
 	}
 
 	private initEngine({
