@@ -40,8 +40,8 @@ export const STALE_MS = 7 * DAY_MS;
 export const WAIT_MS = 2 * DAY_MS;
 
 const REFRESH_BRANCH = 'base-image-refresh/';
-const DAILY_BRANCH = `${REFRESH_BRANCH}daily`;
-const REVIEW_BRANCH = `${REFRESH_BRANCH}review`;
+export const DAILY_BRANCH = `${REFRESH_BRANCH}daily`;
+export const REVIEW_BRANCH = `${REFRESH_BRANCH}review`;
 
 /** The severities that make a finding stale after 7 days. */
 const STALE_SEVERITIES = new Set(['CRITICAL', 'HIGH']);
@@ -191,7 +191,7 @@ const REFRESH_BRANCHES = [
 ];
 
 /** The open refresh PRs, with the names of their failed checks. */
-async function collectPullRequests() {
+export async function collectPullRequests() {
 	const owner = process.env.GITHUB_REPOSITORY.split('/')[0];
 	const pulls = (
 		await Promise.all(

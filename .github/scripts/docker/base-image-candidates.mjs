@@ -158,7 +158,8 @@ function resolveDigest(repository, tag) {
 	return digest;
 }
 
-function scan(ref, platform, workDir) {
+/** Scans an image for fixable OS findings on one platform. */
+export function scan(ref, platform, workDir) {
 	const output = path.join(workDir, 'trivy.json');
 	execFileSync(
 		'trivy',
