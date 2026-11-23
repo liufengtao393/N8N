@@ -13,6 +13,11 @@ import { UserError } from '@n8n/errors';
 import oracledb from 'oracledb';
 
 import { routeBinaryProperties } from '@utils/binary';
+import {
+	assertCursorColumnNotNull,
+	assertCursorColumnType,
+	assertUniqueCursorColumn,
+} from '@utils/sql-keyset-paging';
 import { generatePairedItemData, wrapData } from '@utils/utilities';
 
 import type {
@@ -177,7 +182,7 @@ function getExecuteManyOptions(
 	return execOptions;
 }
 
-function addBindParam(
+export function addBindParam(
 	colInfo: ColumnDefinition,
 	value: any,
 	bindParameters: oracledb.BindParameter[],
@@ -378,6 +383,118 @@ ORDER BY atc.COLUMN_NAME`;
 			await conn.close();
 		}
 	}
+}
+
+// Reads the catalog, not constraint_types from getColumnMetaData: that field is aggregated per column
+// and marks every member of a composite constraint as unique.
+// A primary key or unique constraint can use a non-unique index, so the constraints are read too.
+export async function getUniqueKeyColumns(
+	pool: oracledb.Pool,
+	schema: string,
+	table: string,
+): Promise<string[]> {
+	const conn = await pool.getConnection();
+	try {
+		const result = await conn.execute<{ COLUMN_NAME: string }>(
+			`SELECT MIN(aic.column_name) AS column_name
+			 FROM all_indexes ai
+			 JOIN all_ind_columns aic ON aic.index_owner = ai.owner AND aic.index_name = ai.index_name
+			 WHERE ai.table_owner = :schema_name AND ai.table_name = :table_name
+			   AND ai.uniqueness = 'UNIQUE' AND ai.index_type IN ('NORMAL', 'NORMAL/REV', 'IOT - TOP')
+			 GROUP BY ai.owner, ai.index_name HAVING COUNT(*) = 1
+			 UNION
+			 SELECT MIN(acc.column_name)
+			 FROM all_constraints ac
+			 JOIN all_cons_columns acc ON acc.owner = ac.owner AND acc.constraint_name = ac.constraint_name
+			 WHERE ac.owner = :schema_name AND ac.table_name = :table_name
+			   AND ac.constraint_type IN ('P', 'U') AND ac.status = 'ENABLED' AND ac.validated = 'VALIDATED'
+			 GROUP BY ac.owner, ac.constraint_name HAVING COUNT(*) = 1`,
+			{ schema_name: schema, table_name: table },
+			{ outFormat: oracledb.OUT_FORMAT_OBJECT },
+		);
+		return (result.rows ?? []).map((row) => row.COLUMN_NAME);
+	} finally {
+		await conn.close();
+	}
+}
+
+/**
+ * Throws if a query pages by a text column and the session of `connection` does not sort in binary order.
+ * ORDER BY follows NLS_SORT, but a comparison and a unique index can use binary order.
+ * Sessions of one pool can differ, so the check runs on the connection that runs the queries.
+ */
+async function assertBinarySort(
+	node: INode,
+	connection: oracledb.Connection,
+	queries: QueryWithValues[],
+) {
+	const itemIndex = queries.findIndex((query) => query.startAfterTextColumn);
+	if (itemIndex === -1) return;
+	const result = await connection.execute<{ NLS_SORT: string }>(
+		"SELECT SYS_CONTEXT('USERENV', 'NLS_SORT') AS nls_sort FROM dual",
+		[],
+		{ outFormat: oracledb.OUT_FORMAT_OBJECT },
+	);
+	const sessionSort = result.rows?.[0]?.NLS_SORT ?? 'BINARY';
+	if (sessionSort !== 'BINARY') {
+		throw new NodeOperationError(
+			node,
+			`Start After cannot use the text column "${queries[itemIndex].startAfterTextColumn}" in this database session`,
+			{
+				itemIndex,
+				description: `The session sorts text with NLS_SORT = ${sessionSort}. Start After needs binary order, or a page can skip rows. Use a NUMBER column, or connect with a session where NLS_SORT is BINARY.`,
+			},
+		);
+	}
+}
+
+// n8n outputs the other types as objects, or with less precision
+const START_AFTER_TYPE = /^(NUMBER|N?VARCHAR2|N?CHAR)$/;
+
+/**
+ * Throws if Start After cannot page by the column without skipped or repeated rows.
+ * `uniqueColumns` comes from getUniqueKeyColumns. The query runner checks the sort order of a text column.
+ */
+export function checkStartAfterColumn(
+	node: INode,
+	itemIndex: number,
+	table: string,
+	column: string,
+	columnInfo: ColumnDefinition | undefined,
+	uniqueColumns: string[],
+) {
+	if (!columnInfo) {
+		throw new NodeOperationError(node, `Column "${column}" was not found in table "${table}"`, {
+			itemIndex,
+		});
+	}
+	assertUniqueCursorColumn(node, itemIndex, uniqueColumns, column);
+	assertCursorColumnType(node, itemIndex, column, columnInfo.type, START_AFTER_TYPE);
+	assertCursorColumnNotNull(node, itemIndex, column, columnInfo.nullable);
+}
+
+/**
+ * Adds the binds of the Start After value and returns the SQL that reads it.
+ * A NUMBER value stays text, so Oracle reads all its digits. The format made from
+ * the value keeps the conversion independent of the session NLS_NUMERIC_CHARACTERS.
+ */
+export function addStartAfterBind(
+	colInfo: ColumnDefinition,
+	value: string,
+	bindParameters: oracledb.BindParameter[],
+): string {
+	const index = bindParameters.length;
+	const text = value.trim();
+	if (colInfo.type === 'NUMBER' && /^-?(\d+(\.\d+)?|\.\d+)$/.test(text)) {
+		const format = text.replace('-', '').replace(/\d/g, '9').replace('.', 'D');
+		bindParameters.push(
+			{ type: oracledb.STRING, val: text },
+			{ type: oracledb.STRING, val: format },
+		);
+		return `TO_NUMBER(:${index}, :${index + 1}, 'NLS_NUMERIC_CHARACTERS=''.,''')`;
+	}
+	addBindParam(colInfo, value, bindParameters);
+	return `:${index}`;
 }
 
 export function prepareErrorItem(
@@ -669,6 +786,7 @@ export function configureQueryRunner(
 				return createErrorItems(error, items);
 			}
 			try {
+				await assertBinarySort(node, connection, queries);
 				for (let i = 0; i < queries.length; i++) {
 					try {
 						const { query, values, outputColumns } = queries[i];
@@ -732,6 +850,7 @@ export function configureQueryRunner(
 				return createErrorItems(error, items);
 			}
 			try {
+				await assertBinarySort(node, connection, queries);
 				for (let i = 0; i < queries.length; i++) {
 					try {
 						const { query, values, outputColumns } = queries[i];

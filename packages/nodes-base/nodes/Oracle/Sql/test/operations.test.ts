@@ -7,6 +7,7 @@ import {
 	type INodeExecutionData,
 	type INodeParameters,
 } from 'n8n-workflow';
+import { NodeOperationError } from 'n8n-workflow';
 import * as oracleDBTypes from 'oracledb';
 import type { Mock } from 'vitest';
 
@@ -1704,6 +1705,306 @@ VALUES (
 				);
 			},
 		);
+
+		// These tests mock the catalog query, so they do not run against a real database
+		describe.skipIf(Boolean(integratedTests))('startAfter', () => {
+			const baseParameters: IDataObject = {
+				operation: 'select',
+				schema: { __rl: true, mode: 'list', value: CONFIG.user },
+				table: { __rl: true, value: table, mode: 'list', cachedResultName: table },
+				limit: 5,
+				sort: {},
+				options: {},
+			};
+			const nodeOptions = baseParameters.options as IDataObject;
+			const defaultImpl = mockConnection.execute.getMockImplementation()!;
+			const isCatalogQuery = ([sql]: [string?]) => String(sql).includes('all_indexes');
+
+			beforeEach(() => {
+				mockConnection.execute.mockImplementation((sql: string = '') =>
+					isCatalogQuery([sql]) ? { rows: [{ COLUMN_NAME: 'ID' }] } : defaultImpl(sql),
+				);
+			});
+
+			afterEach(() => {
+				mockConnection.execute.mockImplementation(defaultImpl);
+			});
+
+			it('first page: should add ORDER BY on the cursor column without a predicate', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'ID', value: '' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[
+						{
+							query: `SELECT * FROM "${CONFIG.user}"."${table}" ORDER BY "ID" ASC FETCH FIRST 5 ROWS ONLY`,
+							values: [],
+						},
+					],
+					items,
+					nodeOptions,
+				);
+			});
+
+			it('next page: should wrap the existing WHERE and bind the cursor value by column type', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					where: {
+						values: [
+							{ column: 'ID', condition: '>=', value: 2 },
+							{ column: 'NAME', condition: 'equal', value: 'Bob' },
+						],
+					},
+					combineConditions: 'OR',
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[
+						{
+							query: `SELECT * FROM "${CONFIG.user}"."${table}" WHERE ("ID" >= :0 OR "NAME" = :1) AND "ID" > TO_NUMBER(:2, :3, 'NLS_NUMERIC_CHARACTERS=''.,''') ORDER BY "ID" ASC FETCH FIRST 5 ROWS ONLY`,
+							values: [
+								{ type: oracleDBTypes.NUMBER, val: 2 },
+								{ type: oracleDBTypes.STRING, val: 'Bob' },
+								{ type: oracleDBTypes.STRING, val: '7' },
+								{ type: oracleDBTypes.STRING, val: '9' },
+							],
+						},
+					],
+					items,
+					nodeOptions,
+				);
+			});
+
+			it('should page down when the cursor column sorts DESC', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					sort: { values: [{ column: 'ID', direction: 'DESC' }] },
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[
+						{
+							query: `SELECT * FROM "${CONFIG.user}"."${table}" WHERE "ID" < TO_NUMBER(:0, :1, 'NLS_NUMERIC_CHARACTERS=''.,''') ORDER BY "ID" DESC FETCH FIRST 5 ROWS ONLY`,
+							values: [
+								{ type: oracleDBTypes.STRING, val: '7' },
+								{ type: oracleDBTypes.STRING, val: '9' },
+							],
+						},
+					],
+					items,
+					nodeOptions,
+				);
+			});
+
+			it('should throw when the cursor column can be null', async () => {
+				mockConnection.execute.mockImplementation((sql: string = '') =>
+					isCatalogQuery([sql]) ? { rows: [{ COLUMN_NAME: 'AGE' }] } : defaultImpl(sql),
+				);
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'AGE', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await expect(
+					select.execute.call(mockThis, runQueries, items, nodeOptions, pool),
+				).rejects.toThrow('Column "AGE" can be null');
+			});
+
+			it('should throw when the type of the cursor column is not supported', async () => {
+				mockConnection.execute.mockImplementation((sql: string = '') =>
+					isCatalogQuery([sql]) ? { rows: [{ COLUMN_NAME: 'JOIN_DATE' }] } : defaultImpl(sql),
+				);
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'JOIN_DATE', value: '' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await expect(
+					select.execute.call(mockThis, runQueries, items, nodeOptions, pool),
+				).rejects.toThrow('Start After does not support the column "JOIN_DATE" of type DATE');
+			});
+
+			it('should throw when the cursor column is not the first sort rule', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					sort: { values: [{ column: 'NAME', direction: 'ASC' }] },
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await expect(
+					select.execute.call(mockThis, runQueries, items, nodeOptions, pool),
+				).rejects.toThrow('Sort by "ID" first');
+			});
+
+			it('should bind a NUMBER value as text with a format made from the value', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'ID', value: '-123456789012345678.25' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries.mock.calls[0][0][0].values).toEqual([
+					{ type: oracleDBTypes.STRING, val: '-123456789012345678.25' },
+					{ type: oracleDBTypes.STRING, val: '999999999999999999D99' },
+				]);
+			});
+
+			it('should throw for a text column when the session does not sort in binary order', async () => {
+				mockConnection.execute.mockImplementation((sql: string = '') => {
+					if (isCatalogQuery([sql])) return { rows: [{ COLUMN_NAME: 'NAME' }] };
+					if (sql.includes('NLS_SORT')) return { rows: [{ NLS_SORT: 'GERMAN' }] };
+					return {
+						rows: defaultImpl(sql).rows.map((row) =>
+							row.COLUMN_NAME === 'NAME' ? { ...row, NULLABLE: 'N' } : row,
+						),
+					};
+				});
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'NAME', value: 'b' } },
+				});
+				// The real runner, because it reads NLS_SORT on the connection that runs the page query
+				const runQueries = configureQueryRunner.call(mockThis, mockThis.getNode(), false, pool);
+
+				await expect(
+					select.execute.call(mockThis, runQueries, items, nodeOptions, pool),
+				).rejects.toThrow('Start After cannot use the text column "NAME" in this database session');
+				expect(mockConnection.execute).not.toHaveBeenCalledWith(
+					expect.stringContaining('ORDER BY "NAME"'),
+					expect.anything(),
+					expect.anything(),
+				);
+			});
+
+			it('should not duplicate ORDER BY when the cursor column is already sorted', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					sort: { values: [{ column: 'ID', direction: 'ASC' }] },
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[
+						{
+							query: `SELECT * FROM "${CONFIG.user}"."${table}" WHERE "ID" > TO_NUMBER(:0, :1, 'NLS_NUMERIC_CHARACTERS=''.,''') ORDER BY "ID" ASC FETCH FIRST 5 ROWS ONLY`,
+							values: [
+								{ type: oracleDBTypes.STRING, val: '7' },
+								{ type: oracleDBTypes.STRING, val: '9' },
+							],
+						},
+					],
+					items,
+					nodeOptions,
+				);
+			});
+
+			it('should throw when the cursor column is not unique', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'NAME', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				const promise = select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				await expect(promise).rejects.toThrow(NodeOperationError);
+				await expect(promise).rejects.toThrow(
+					'Column "NAME" has no unique index that Start After can use',
+				);
+				expect(runQueries).not.toHaveBeenCalled();
+			});
+
+			it('returnAll: should ignore the cursor and not query the catalog', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					returnAll: true,
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[{ query: `SELECT * FROM "${CONFIG.user}"."${table}"`, values: [] }],
+					items,
+					nodeOptions,
+				);
+				expect(mockConnection.execute.mock.calls.some(isCatalogQuery)).toBe(false);
+			});
+
+			it('should query the catalog once per table across items', async () => {
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'ID', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+				const twoItems = [{ json: {} }, { json: {} }];
+
+				await select.execute.call(mockThis, runQueries, twoItems, nodeOptions, pool);
+
+				expect(mockConnection.execute.mock.calls.filter(isCatalogQuery)).toHaveLength(1);
+			});
+
+			it('should throw when the cursor column is unique but has no column metadata', async () => {
+				mockConnection.execute.mockImplementation((sql: string = '') =>
+					isCatalogQuery([sql]) ? { rows: [{ COLUMN_NAME: 'GHOST' }] } : defaultImpl(sql),
+				);
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'GHOST', value: '7' } },
+				});
+				const runQueries = getRunQueriesFn(mockThis, pool);
+
+				const promise = select.execute.call(mockThis, runQueries, items, nodeOptions, pool);
+
+				await expect(promise).rejects.toThrow(NodeOperationError);
+				await expect(promise).rejects.toThrow(`Column "GHOST" was not found in table "${table}"`);
+				expect(runQueries).not.toHaveBeenCalled();
+			});
+
+			it('pre-12c: should keep the cursor ORDER BY inside the ROWNUM wrapper', async () => {
+				const legacyPool = createFakePool({ ...mockConnection, oracleServerVersion: 1102000000 });
+				const mockThis = createMockExecuteFunction({
+					...baseParameters,
+					startAfter: { values: { column: 'ID', value: '' } },
+				});
+				const runQueries = vi.fn<RunQueriesFn>();
+
+				await select.execute.call(mockThis, runQueries, items, nodeOptions, legacyPool);
+
+				expect(runQueries).toHaveBeenCalledWith(
+					[
+						{
+							query: `SELECT * FROM (SELECT * FROM "${CONFIG.user}"."${table}" ORDER BY "ID" ASC) WHERE ROWNUM <= 5`,
+							values: [],
+						},
+					],
+					items,
+					nodeOptions,
+				);
+			});
+		});
 	});
 
 	describe('Test insert operation', () => {
