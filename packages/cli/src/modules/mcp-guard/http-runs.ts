@@ -119,6 +119,7 @@ export class HttpRunRegistry {
 			profile,
 			context,
 			gymIds: state?.gymIds,
+			refs: profile.idMap ? async () => await admin.refs(tenant) : undefined,
 		});
 		const run: HttpRun = { tenant, lastUsed: Date.now(), router };
 		this.runs.set(runId, run);
