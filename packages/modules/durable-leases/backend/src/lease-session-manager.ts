@@ -1,5 +1,6 @@
 import type { Logger } from '@n8n/backend-common';
 import type { LeaseKindRepository, LeaseSessionRepository } from '@n8n/db';
+import { OperationalError } from '@n8n/errors';
 import { randomUUID } from 'node:crypto';
 
 export interface SessionClock {
@@ -25,6 +26,15 @@ export interface LeaseSessionManagerDeps {
 	logger: Logger;
 }
 
+interface InsertInFlight {
+	id: string;
+	startedMono: number;
+	done: Promise<void>;
+	// False when the lease length passes or the manager gives up the wait before the insert finishes.
+	finished: Promise<boolean>;
+	giveUp: () => void;
+}
+
 const WATCHDOG_INTERVAL_MS = 100;
 
 const BEAT_JITTER = 0.1;
@@ -48,9 +58,11 @@ export class LeaseSessionManager {
 
 	private inFlightRenewal: { id: string; done: Promise<void> } | undefined;
 
-	private inFlightInsert: Promise<void> | undefined;
+	private inFlightInsert: InsertInFlight | undefined;
 
 	private readonly pendingDeletes = new Set<Promise<void>>();
+
+	private readonly abandonedInserts = new Set<Promise<void>>();
 
 	constructor(private readonly deps: LeaseSessionManagerDeps) {}
 
@@ -66,10 +78,33 @@ export class LeaseSessionManager {
 
 	private async ensureSession(): Promise<void> {
 		if (this.stopped || this.currentId !== undefined) return;
-		this.inFlightInsert ??= this.insertSession(randomUUID()).finally(() => {
-			this.inFlightInsert = undefined;
+		this.inFlightInsert ??= this.startInsert();
+		const finished = await this.inFlightInsert.finished;
+		if (!finished && !this.stopped) {
+			throw new OperationalError(
+				`Lease session insert for kind "${this.deps.kind}" did not finish within the lease length`,
+			);
+		}
+	}
+
+	private startInsert(): InsertInFlight {
+		const id = randomUUID();
+		let timer: NodeJS.Timeout | undefined;
+		let giveUp: () => void = () => {};
+		const outOfTime = new Promise<false>((resolve) => {
+			giveUp = () => {
+				clearTimeout(timer);
+				resolve(false);
+			};
+			timer = setTimeout(giveUp, this.deps.leaseSeconds * 1000);
 		});
-		await this.inFlightInsert;
+		const startedMono = this.deps.clock.monotonicMs();
+		const done = this.insertSession(id).finally(() => {
+			clearTimeout(timer);
+			if (this.inFlightInsert?.id === id) this.inFlightInsert = undefined;
+		});
+		const finished = Promise.race([done.then(() => true), outOfTime]);
+		return { id, startedMono, done, finished, giveUp };
 	}
 
 	async stop(): Promise<void> {
@@ -83,8 +118,9 @@ export class LeaseSessionManager {
 		clearInterval(this.watchdogTimer);
 		this.beatTimer = undefined;
 		this.watchdogTimer = undefined;
+		this.inFlightInsert?.giveUp();
 
-		await this.inFlightInsert?.catch(() => {});
+		await this.waitForInsert();
 
 		const id = this.currentId;
 		this.currentId = undefined;
@@ -103,6 +139,28 @@ export class LeaseSessionManager {
 		await Promise.all(this.pendingDeletes);
 	}
 
+	private async waitForInsert(): Promise<void> {
+		const inserts = [...this.abandonedInserts];
+		if (this.inFlightInsert !== undefined) inserts.push(this.inFlightInsert.done);
+		if (inserts.length === 0) return;
+		// The manager deletes a row that lands after this wait; the row expires only if that delete fails.
+		await this.waitAtMostOneLease(
+			Promise.all(inserts.map(async (insert) => await insert.catch(() => {}))).then(() => {}),
+		);
+	}
+
+	private async waitAtMostOneLease(done: Promise<void>): Promise<boolean> {
+		let timer: NodeJS.Timeout | undefined;
+		const giveUp = new Promise<false>((resolve) => {
+			timer = setTimeout(() => resolve(false), this.deps.leaseSeconds * 1000);
+		});
+		try {
+			return await Promise.race([done.then(() => true as const), giveUp]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
 	private async insertSession(id: string): Promise<void> {
 		const { kind, hostId, bootId, kinds, sessions, clock } = this.deps;
 		const { leaseSeconds } = this.deps;
@@ -117,6 +175,10 @@ export class LeaseSessionManager {
 			{},
 		);
 
+		if (this.stopped || this.inFlightInsert?.id !== id) {
+			this.deleteRow(id);
+			return;
+		}
 		this.currentId = id;
 		this.moveDeadlines(sentMono, sentWall);
 	}
@@ -139,6 +201,7 @@ export class LeaseSessionManager {
 
 		const id = this.currentId;
 		if (id === undefined) {
+			this.abandonStaleInsert();
 			void this.ensureSession().catch((error: unknown) => {
 				this.deps.logger.warn('Failed to start lease session', { kind: this.deps.kind, error });
 			});
@@ -173,7 +236,7 @@ export class LeaseSessionManager {
 			return;
 		}
 
-		// Stop has already deleted the current row and waited for the deletes of lost sessions.
+		// Stop has already deleted the row of the current session.
 		if (this.stopped) return;
 
 		if (renewed) {
@@ -186,6 +249,22 @@ export class LeaseSessionManager {
 		}
 
 		if (this.currentId === id) this.lose('renewal found the lease session expired');
+	}
+
+	private abandonStaleInsert(): void {
+		const insert = this.inFlightInsert;
+		if (insert === undefined) return;
+		if (this.deps.clock.monotonicMs() - insert.startedMono < this.deps.leaseSeconds * 1000) return;
+		this.deps.logger.warn('Abandoned a lease session insert that did not finish', {
+			kind: this.deps.kind,
+			sessionId: insert.id,
+		});
+		this.inFlightInsert = undefined;
+		insert.giveUp();
+		const abandoned = insert.done
+			.catch(() => {})
+			.finally(() => this.abandonedInserts.delete(abandoned));
+		this.abandonedInserts.add(abandoned);
 	}
 
 	private checkDeadlines(): void {
