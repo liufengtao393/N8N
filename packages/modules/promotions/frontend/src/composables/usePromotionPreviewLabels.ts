@@ -80,7 +80,7 @@ export function usePromotionPreviewLabels() {
 				});
 			}
 			return i18n.baseText(
-				// Users cannot resolve a dependency that they cannot access.
+				// Users cannot resolve a dependency that is outside their access.
 				blocking.every(({ kind }) => kind === 'outside')
 					? 'promotions.preview.marker.workflow.outside'
 					: 'promotions.preview.marker.workflow',
@@ -93,15 +93,15 @@ export function usePromotionPreviewLabels() {
 		}
 		const count = new Set(blocking.flatMap(({ workflowKeys }) => workflowKeys)).size;
 		const options = { adjustToNumber: count, interpolate: { count: String(count) } };
-		if (first.kind === 'access') return i18n.baseText('promotions.preview.marker.access', options);
+		// In both cases the credential exists, and the project cannot use it.
+		if (first.kind === 'access' || first.kind === 'outside') {
+			return i18n.baseText('promotions.preview.marker.access', options);
+		}
 		if (first.kind === 'missing' && resource.type === 'credential') {
 			return i18n.baseText('promotions.preview.marker.missingCredential', options);
 		}
 		if (first.kind === 'missing' && resource.type === 'variable') {
 			return i18n.baseText('promotions.preview.marker.missingVariable', options);
-		}
-		if (first.kind === 'outside' && resource.type === 'credential') {
-			return i18n.baseText('promotions.preview.marker.outsideCredential', options);
 		}
 		return i18n.baseText('promotions.preview.marker.conflict', options);
 	}

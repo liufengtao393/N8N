@@ -47,8 +47,9 @@ export function toOperationRequest(
 
 /**
  * `missing`, `access`, `conflict`, `moved` (between projects) and `outside` (a dependency that
- * the user cannot access) stop the operation for their workflows. A moved folder stops Apply for
- * every workflow. A `destructive` data table change needs a confirmation. A `warning` only informs.
+ * only someone else can resolve) stop the operation for their workflows. A moved folder stops
+ * Apply for every workflow. A `destructive` data table change needs a confirmation. A `warning`
+ * only informs.
  */
 export type BlockerKind =
 	| 'missing'
@@ -122,13 +123,16 @@ export function indexByWorkflow<Entry extends UsedByWorkflows>(
 }
 
 /**
- * The missing dependencies of an Apply that the page lists, counts and enforces for one selection.
- * This is the only place that decides it.
+ * The missing dependencies of an Apply that the page lists and counts for one selection. This is
+ * the only place that decides it.
  * - The other lists of the check already detail a credential or a variable that the user can
  *   resolve, so those entries are left out.
  * - An entry with a `condition` holds only when the selection includes its target workflow
  *   (`target-selected`), or only when it does not (`target-not-selected`). Only the Apply preview
  *   of a project sends a `condition`.
+ *
+ * The user accepts the ones that do not stop the Apply in its confirmation. The others are
+ * blockers: see `listDependencyBlockers`.
  */
 export const listOnlyDependencies = (
 	missingDependencies: PromotionMissingDependency[],
@@ -139,6 +143,25 @@ export const listOnlyDependencies = (
 		if (condition === undefined || id === undefined) return true;
 		return selected.has(workflowKey(id)) === (condition === 'target-selected');
 	});
+
+/**
+ * The blockers of the missing dependencies that stop the Apply. `dependencies` is the list of
+ * `listOnlyDependencies`, so the blockers follow the selection as the Issues tab does. The user
+ * cannot resolve these dependencies on the page.
+ */
+export const listDependencyBlockers = (dependencies: PromotionMissingDependency[]) =>
+	dependencies.flatMap(({ blocking, kind, id, consumers }): Blocker[] =>
+		blocking
+			? [
+					{
+						kind: 'outside',
+						// Only a credential has a preview row to mark.
+						resourceKey: kind === 'credential' && id !== undefined ? `credential:${id}` : null,
+						workflowKeys: consumerKeys(consumers),
+					},
+				]
+			: [],
+	);
 
 /**
  * Keeps the blockers of workflows that the preview lists. The check also covers unchanged
@@ -167,22 +190,17 @@ export function scopeCheck(check: ApplyCheckResult, graph: SelectionGraph): Appl
 	};
 }
 
-/**
- * The blockers of the check. A project-wide conflict blocks every key in `listedKeys`. A missing
- * dependency with a condition is a blocker only when `selected` matches the condition.
- */
+/** The blockers of the check. A project-wide conflict blocks every key in `listedKeys`. */
 export function listBlockers(
 	{
 		missingBindings,
 		accessRequirements,
 		conflicts,
 		warnings,
-		missingDependencies,
 		movedWorkflows,
 		movedFolders,
 	}: ApplyCheckResult,
 	listedKeys: ResourceKey[],
-	selected: ReadonlySet<ResourceKey>,
 ): Blocker[] {
 	const blockers: Blocker[] = [];
 	for (const binding of missingBindings) {
@@ -245,21 +263,8 @@ export function listBlockers(
 			});
 		}
 	}
-	// A dependency that does not stop the Apply is not a blocker. The page only lists it.
-	for (const dependency of listOnlyDependencies(missingDependencies, selected)) {
-		if (!dependency.blocking) continue;
-		blockers.push({
-			kind: 'outside',
-			// Only a credential has a preview row to mark.
-			resourceKey:
-				dependency.kind === 'credential' && dependency.id !== undefined
-					? `credential:${dependency.id}`
-					: null,
-			workflowKeys: consumerKeys(dependency.consumers),
-		});
-	}
 	for (const warning of warnings) {
-		// A reference that is broken on the source instance marks no row.
+		// A reference that was broken on the source has no preview row. The Issues tab lists it.
 		if (warning.code !== 'variable-shadowed') continue;
 		blockers.push({
 			kind: 'warning',

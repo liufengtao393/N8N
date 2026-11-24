@@ -27,6 +27,7 @@ import PromotionBlockers from '../components/preview/PromotionBlockers.vue';
 import PromotionChangeCards from '../components/preview/PromotionChangeCards.vue';
 import PromotionResourceTree from '../components/preview/PromotionResourceTree.vue';
 import PromotionReviewBlocker from '../components/preview/PromotionReviewBlocker.vue';
+import ApplyUnresolvedDialog from '../components/ApplyUnresolvedDialog.vue';
 import PromoteSelectionDialog from '../components/PromoteSelectionDialog.vue';
 import { usePromotionOperation, type OperationRequest } from '../composables/usePromotionOperation';
 import { usePromotionResourceDetails } from '../composables/usePromotionResourceDetails';
@@ -39,6 +40,7 @@ import {
 	indexByWorkflow,
 	isBlocking,
 	listBlockers,
+	listDependencyBlockers,
 	listOnlyDependencies,
 	crossProjectMoveBlockers,
 	toOperationRequest,
@@ -85,17 +87,44 @@ const scopedCheck = computed(() => {
 // A project-wide conflict blocks all of them, so it also stops a selection without workflows.
 const selectableResourceKeys = computed(() => (graph.value ? selectableKeys(graph.value) : []));
 // A missing dependency with a condition depends on the selection, and the selection depends on
-// the blocked workflows. So the blockers read this copy of the selected keys, which exists before
-// the selection and follows it.
+// the blocked workflows. So the list of the Issues tab reads this copy of the selected keys, which
+// exists before the selection and follows it.
 const selectedKeys = shallowRef<ReadonlySet<ResourceKey>>(new Set());
+// The missing dependencies that the Issues tab lists as rows of their own. Promote: what the
+// selected workflows use, and the branch does not hold after the Promote. Nothing there stops the
+// Promote. Apply: the dependencies that the other lists of the check do not detail, and that hold
+// for the selection.
+const missingDependencies = computed(() =>
+	props.direction === 'apply'
+		? listOnlyDependencies(scopedCheck.value?.missingDependencies ?? [], selectedKeys.value)
+		: scopeToSelection(preview.value?.missingDependencies ?? [], selectedKeys.value),
+);
 const blockerList = computed(() => [
 	...(scopedCheck.value
-		? listBlockers(scopedCheck.value, selectableResourceKeys.value, selectedKeys.value)
+		? [
+				...listBlockers(scopedCheck.value, selectableResourceKeys.value),
+				// A dependency that stops the Apply, and that only the Issues tab lists.
+				...listDependencyBlockers(missingDependencies.value),
+			]
 		: []),
 	...(props.direction === 'promote' && graph.value ? crossProjectMoveBlockers(graph.value) : []),
 ]);
 const blockers = computed(() => indexBlockers(blockerList.value));
-const operation = usePromotionOperation(projectId, direction, { preview, check, refresh });
+// Apply waits for the answer of the dialog that lists the unresolved dependencies.
+const unresolvedAnswer = shallowRef<((confirmed: boolean) => void) | null>(null);
+const confirmUnresolved = async () =>
+	await new Promise<boolean>((resolve) => {
+		unresolvedAnswer.value = (confirmed) => {
+			unresolvedAnswer.value = null;
+			resolve(confirmed);
+		};
+	});
+const operation = usePromotionOperation(projectId, direction, {
+	preview,
+	check,
+	refresh,
+	confirmUnresolved,
+});
 const selection = usePromotionSelection(graph, {
 	// Each change of the selection makes a new set of blocked workflows. The selection must react
 	// only when the keys of the set change. If not, the two never settle.
@@ -114,15 +143,15 @@ watch(
 	},
 	{ immediate: true, flush: 'sync' },
 );
-// The missing dependencies that the Issues tab lists as rows of their own. Promote: what the
-// selected workflows use, and the branch does not hold after the Promote. Nothing there stops the
-// Promote. Apply: the dependencies that the other lists of the check do not detail, and that hold
-// for the selection.
-const missingDependencies = computed(() =>
-	props.direction === 'apply'
-		? listOnlyDependencies(scopedCheck.value?.missingDependencies ?? [], selectedKeys.value)
-		: scopeToSelection(preview.value?.missingDependencies ?? [], selection.selected.value),
-);
+// What the operation leaves unresolved, which the user must accept. Promote: every missing
+// dependency of the selection. Apply: the entries of the Issues tab that do not stop the Apply,
+// for the selected workflows. So the count, the button and the confirmation follow the conditions
+// of the entries, as the tab does. A whole-instance Apply has no selection.
+const unresolved = computed(() => {
+	if (props.direction === 'promote') return missingDependencies.value;
+	const accepted = missingDependencies.value.filter(({ blocking }) => !blocking);
+	return isInstance.value ? accepted : scopeToSelection(accepted, selection.selected.value);
+});
 const dependencyWarnings = computed(() =>
 	scopeToSelection(preview.value?.warnings ?? [], selection.selected.value),
 );
@@ -257,6 +286,7 @@ const request = computed((): OperationRequest => {
 			folderIds: [],
 			credentialIds: [],
 			confirmDestructiveChanges: blockerList.value.some(({ kind }) => kind === 'destructive'),
+			confirmMissingDependencies: unresolved.value.length > 0,
 			deletedProjects: (check.value?.conflicts ?? []).flatMap((conflict) =>
 				conflict.code === 'project-deletion' ? conflict.project.name : [],
 			),
@@ -267,6 +297,7 @@ const request = computed((): OperationRequest => {
 			? toOperationRequest(graph.value, selection.selected.value)
 			: { workflowIds: [], folderIds: [], credentialIds: [] }),
 		confirmDestructiveChanges: touchesDestructiveChange(blockers.value, selection.selected.value),
+		confirmMissingDependencies: unresolved.value.length > 0,
 	};
 });
 const isDestructive = computed(
@@ -304,20 +335,29 @@ const actionableChanges = computed(() => {
 	);
 	return includedChangeCount(graph.value, resolveInclusion(graph.value, actionable));
 });
-const canSubmit = computed(
+// A refresh or a running operation stops the button for a moment. It does not change this.
+const hasSubmittableChanges = computed(
 	() =>
 		state.value === 'ready' &&
-		!refreshing.value &&
-		!operation.isBusy.value &&
 		!submitBlockedReason.value &&
 		actionableChanges.value > 0 &&
 		(props.direction === 'promote' || !!check.value),
 );
+const canSubmit = computed(
+	() => hasSubmittableChanges.value && !refreshing.value && !operation.isBusy.value,
+);
+// The button names what stays unresolved. The confirmation repeats this label. A button that has
+// nothing to submit keeps the plain label, so it does not offer what the page disables.
 const submitLabel = computed(() =>
-	i18n.baseText(`promotions.preview.submit.${props.direction}`, {
-		adjustToNumber: actionableChanges.value,
-		interpolate: { count: String(actionableChanges.value) },
-	}),
+	hasSubmittableChanges.value && unresolved.value.length > 0
+		? i18n.baseText(`promotions.preview.submit.${props.direction}.unresolved`, {
+				adjustToNumber: unresolved.value.length,
+				interpolate: { count: String(unresolved.value.length) },
+			})
+		: i18n.baseText(`promotions.preview.submit.${props.direction}`, {
+				adjustToNumber: actionableChanges.value,
+				interpolate: { count: String(actionableChanges.value) },
+			}),
 );
 
 // Promote asks for the optional commit message first. Apply confirms inside the operation.
@@ -329,6 +369,7 @@ const promoteCommitMessage = ref('');
 watch([projectId, direction], () => {
 	promoteCommitMessage.value = '';
 	promoteDialogOpen.value = false;
+	unresolvedAnswer.value?.(false);
 });
 
 async function onSubmit() {
@@ -346,8 +387,8 @@ async function onPromoteConfirm(commitMessage: string | undefined) {
 
 type PreviewTab = 'changes' | 'blockers';
 const activeTab = ref<PreviewTab>('changes');
-// Warnings do not count in either direction. On Apply, a dependency that stops its workflows is
-// already one of the blockers.
+// Warnings do not count in either direction. On Apply, the blockers already hold a dependency
+// that stops its workflows, so it counts one time.
 const blockerCount = computed(() =>
 	props.direction === 'apply'
 		? blockerList.value.filter(isBlocking).length +
@@ -616,7 +657,14 @@ const treeResizer = useResizablePanel({
 			:base-branch-name="source.branchName"
 			:create-branch-on-promotion="environment.createBranchOnPromotion ?? false"
 			:provider-type="environment.providerType"
+			:unresolved="unresolved"
 			@confirm="onPromoteConfirm"
+		/>
+		<ApplyUnresolvedDialog
+			v-if="unresolvedAnswer"
+			:dependencies="unresolved"
+			@confirm="unresolvedAnswer?.(true)"
+			@cancel="unresolvedAnswer?.(false)"
 		/>
 	</div>
 </template>
