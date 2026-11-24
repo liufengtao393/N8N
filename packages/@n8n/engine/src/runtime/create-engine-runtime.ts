@@ -204,6 +204,7 @@ export function createEngineRuntime({
 			'step-running-no-worker': new RunningStepRepair(
 				executionStore,
 				stepStore,
+				stepQueue,
 				orchestrationQueue,
 				lifecycleEventPublisherFactory,
 			),
