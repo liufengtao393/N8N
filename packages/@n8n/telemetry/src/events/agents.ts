@@ -61,6 +61,12 @@ const agentConfigurationTelemetry = {
 	channels: z.array(z.string()),
 	tool_types: z.array(z.string()),
 	tool_count: z.number(),
+	community_node_tool_count: z
+		.number()
+		.optional()
+		.describe(
+			'Number of node tools whose node comes from a community package. A subset of the "node" entries in tool_types. Absent on rows before this field existed',
+		),
 	num_skills: z.number(),
 	memory_type: z.enum([
 		'none',

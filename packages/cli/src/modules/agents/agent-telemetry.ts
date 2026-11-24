@@ -1,6 +1,7 @@
 import { SKILL_LOAD_TOOL_NAME } from '@n8n/agents';
 import type { AgentIntegrationConfig, AgentJsonConfig } from '@n8n/api-types';
 import { isRecord } from '@n8n/utils/is-record';
+import { isCommunityPackageName } from 'n8n-workflow';
 
 import type {
 	AgentTelemetryMemoryType,
@@ -88,6 +89,11 @@ export function buildAgentConfigurationTelemetryFromConfig(
 	if (hasWebSearch) toolTypes.add('web_search');
 	if (subAgentCount > 0) toolTypes.add('subagent');
 
+	const communityNodeToolCount = (config?.tools ?? []).filter(
+		(tool) =>
+			tool.type === 'node' && isCommunityPackageName(tool.node.nodeType.split('.')[0] ?? ''),
+	).length;
+
 	return {
 		model: config?.model || null,
 		channels,
@@ -98,6 +104,7 @@ export function buildAgentConfigurationTelemetryFromConfig(
 			providerToolCount +
 			(hasWebSearch ? 1 : 0) +
 			subAgentCount,
+		community_node_tool_count: communityNodeToolCount,
 		num_skills: config?.skills?.length ?? 0,
 		memory_type: getMemoryType(config),
 	};

@@ -281,6 +281,7 @@ describe('AgentUsageTelemetryService', () => {
 			channels: ['slack'],
 			tool_types: ['custom'],
 			tool_count: 1,
+			community_node_tool_count: 0,
 			num_skills: 2,
 			memory_type: 'n8n_observational' as const,
 		};

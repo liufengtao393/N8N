@@ -36,6 +36,8 @@ export interface IAgentConfigurationTelemetryProperties {
 	channels: string[];
 	tool_types: string[];
 	tool_count: number;
+	/** Node tools that come from a community package. */
+	community_node_tool_count: number;
 	num_skills: number;
 	memory_type: AgentTelemetryMemoryType;
 }

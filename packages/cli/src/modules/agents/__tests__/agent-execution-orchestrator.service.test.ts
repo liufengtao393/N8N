@@ -143,6 +143,7 @@ const telemetryContext = {
 		channels: [],
 		tool_types: [],
 		tool_count: 0,
+		community_node_tool_count: 0,
 		num_skills: 0,
 		memory_type: 'none' as const,
 	},

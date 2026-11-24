@@ -71,8 +71,34 @@ describe('agent telemetry', () => {
 			channels: ['linear', 'slack'],
 			tool_types: ['custom', 'mcp', 'provider', 'subagent', 'web_search', 'workflow'],
 			tool_count: 6,
+			community_node_tool_count: 0,
 			num_skills: 1,
 			memory_type: 'n8n_observational_episodic',
+		});
+	});
+
+	it('counts the node tools that come from a community package', () => {
+		const nodeTool = (nodeType: string) => ({
+			type: 'node' as const,
+			name: nodeType,
+			node: { nodeType, nodeTypeVersion: 1, nodeParameters: {} },
+		});
+		const config: AgentJsonConfig = {
+			name: 'Test Agent',
+			model: 'anthropic/claude-sonnet-5-5',
+			instructions: 'Be helpful',
+			tools: [
+				nodeTool('n8n-nodes-base.slack'),
+				nodeTool('@n8n/n8n-nodes-langchain.toolCalculator'),
+				nodeTool('n8n-nodes-example.exampleNode'),
+				nodeTool('@scope/n8n-nodes-example.scopedNode'),
+			],
+		};
+
+		expect(buildAgentConfigurationTelemetryFromConfig(config)).toMatchObject({
+			tool_types: ['node'],
+			tool_count: 4,
+			community_node_tool_count: 2,
 		});
 	});
 
@@ -82,6 +108,7 @@ describe('agent telemetry', () => {
 			channels: [],
 			tool_types: [],
 			tool_count: 0,
+			community_node_tool_count: 0,
 			num_skills: 0,
 			memory_type: 'none',
 		});
