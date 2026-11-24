@@ -1,6 +1,7 @@
 import type {
 	PromotionBindingConflict,
 	PromotionBindingConsumer,
+	PromotionMissingDependency,
 	PromotionResource,
 	PromotionVariableScope,
 } from '@n8n/api-types';
@@ -45,11 +46,18 @@ export function toOperationRequest(
 }
 
 /**
- * `missing`, `access`, `conflict` and `moved` (between projects) stop the operation for their
- * workflows. A moved folder stops Apply for every workflow. A `destructive` data table change
- * needs a confirmation. A `warning` only informs.
+ * `missing`, `access`, `conflict`, `moved` (between projects) and `outside` (a dependency that
+ * the user cannot access) stop the operation for their workflows. A moved folder stops Apply for
+ * every workflow. A `destructive` data table change needs a confirmation. A `warning` only informs.
  */
-export type BlockerKind = 'missing' | 'access' | 'conflict' | 'moved' | 'destructive' | 'warning';
+export type BlockerKind =
+	| 'missing'
+	| 'access'
+	| 'conflict'
+	| 'moved'
+	| 'outside'
+	| 'destructive'
+	| 'warning';
 
 export type Blocker = {
 	kind: BlockerKind;
@@ -114,6 +122,25 @@ export function indexByWorkflow<Entry extends UsedByWorkflows>(
 }
 
 /**
+ * The missing dependencies of an Apply that the page lists, counts and enforces for one selection.
+ * This is the only place that decides it.
+ * - The other lists of the check already detail a credential or a variable that the user can
+ *   resolve, so those entries are left out.
+ * - An entry with a `condition` holds only when the selection includes its target workflow
+ *   (`target-selected`), or only when it does not (`target-not-selected`). Only the Apply preview
+ *   of a project sends a `condition`.
+ */
+export const listOnlyDependencies = (
+	missingDependencies: PromotionMissingDependency[],
+	selected: ReadonlySet<ResourceKey>,
+) =>
+	missingDependencies.filter(({ group, kind, condition, id }) => {
+		if (group === 'needs-action' && kind !== 'workflow') return false;
+		if (condition === undefined || id === undefined) return true;
+		return selected.has(workflowKey(id)) === (condition === 'target-selected');
+	});
+
+/**
  * Keeps the blockers of workflows that the preview lists. The check also covers unchanged
  * workflows, which users cannot select, so their blockers stop nothing on the page.
  */
@@ -133,23 +160,29 @@ export function scopeCheck(check: ApplyCheckResult, graph: SelectionGraph): Appl
 			return [conflict];
 		}),
 		warnings: scope(check.warnings),
+		missingDependencies: scope(check.missingDependencies),
 		movedWorkflows: check.movedWorkflows.filter(({ id }) => listed(id)),
 		// A folder that moved into the project stops the import for every selection, so keep all.
 		movedFolders: check.movedFolders,
 	};
 }
 
-/** The blockers of the check. A project-wide conflict blocks every key in `listedKeys`. */
+/**
+ * The blockers of the check. A project-wide conflict blocks every key in `listedKeys`. A missing
+ * dependency with a condition is a blocker only when `selected` matches the condition.
+ */
 export function listBlockers(
 	{
 		missingBindings,
 		accessRequirements,
 		conflicts,
 		warnings,
+		missingDependencies,
 		movedWorkflows,
 		movedFolders,
 	}: ApplyCheckResult,
 	listedKeys: ResourceKey[],
+	selected: ReadonlySet<ResourceKey>,
 ): Blocker[] {
 	const blockers: Blocker[] = [];
 	for (const binding of missingBindings) {
@@ -211,6 +244,19 @@ export function listBlockers(
 				workflowKeys: listedKeys,
 			});
 		}
+	}
+	// A dependency that does not stop the Apply is not a blocker. The page only lists it.
+	for (const dependency of listOnlyDependencies(missingDependencies, selected)) {
+		if (!dependency.blocking) continue;
+		blockers.push({
+			kind: 'outside',
+			// Only a credential has a preview row to mark.
+			resourceKey:
+				dependency.kind === 'credential' && dependency.id !== undefined
+					? `credential:${dependency.id}`
+					: null,
+			workflowKeys: consumerKeys(dependency.consumers),
+		});
 	}
 	for (const warning of warnings) {
 		blockers.push({

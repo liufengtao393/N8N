@@ -1,7 +1,9 @@
 import type { PromotionBindingConsumer, PromotionBindingProject } from '@n8n/api-types';
+import { getStaticSubworkflowId } from 'n8n-workflow';
 
 import { visitWorkflowCredentials } from '@/modules/n8n-packages/entities/credential/workflow-credential-references';
 import type { VariableRequirementsExtractor } from '@/modules/n8n-packages/entities/variable/variable-requirements.extractor';
+import { staticErrorWorkflowId } from '@/modules/n8n-packages/entities/workflow/references/error-workflow.reference';
 import type {
 	InventoryCredential,
 	InventoryVariable,
@@ -24,6 +26,13 @@ export interface CredentialReference {
 export interface VariableReference {
 	name: string;
 	file: InventoryVariable | undefined;
+	workflows: InventoryWorkflow[];
+}
+
+/** A workflow that other workflows call from a node, or set as their error workflow. */
+export interface WorkflowReference {
+	id: string;
+	/** The workflows that reference it. Its caller policy applies to each of them. */
 	workflows: InventoryWorkflow[];
 }
 
@@ -96,6 +105,27 @@ export function collectVariableReferences(
 	return [...groups.values()].sort(
 		(a, b) => compare(a.file?.projectId ?? '', b.file?.projectId ?? '') || compare(a.name, b.name),
 	);
+}
+
+/** Reads the references that the export reads. It does not read a reference in an expression. */
+export function collectWorkflowReferences(
+	inventory: PackageDirectoryInventory,
+): WorkflowReference[] {
+	const groups = new Map<string, WorkflowReference>();
+	const add = (id: string, workflow: InventoryWorkflow) => {
+		const group = groups.get(id) ?? { id, workflows: [] };
+		group.workflows.push(workflow);
+		groups.set(id, group);
+	};
+	for (const workflow of inventory.workflows) {
+		for (const node of workflow.content.nodes ?? []) {
+			const calledId = node?.parameters ? getStaticSubworkflowId(node) : undefined;
+			if (calledId) add(calledId, workflow);
+		}
+		const errorWorkflowId = staticErrorWorkflowId(workflow.content);
+		if (errorWorkflowId) add(errorWorkflowId, workflow);
+	}
+	return [...groups.values()].sort((a, b) => compare(a.id, b.id));
 }
 
 export function consumersOf(

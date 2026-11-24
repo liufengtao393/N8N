@@ -215,6 +215,7 @@ describe('PromotionsService', () => {
 			folderService,
 			mock(),
 			globalConfig,
+			mock(),
 		);
 		service = new PromotionsService(
 			resolver,
@@ -2755,13 +2756,14 @@ describe('PromotionsService', () => {
 			// The check of the plan is covered on its own. Here it only passes the moves through.
 			check = vi
 				.spyOn(applyPreviewService, 'check')
-				.mockImplementation((_plan, _inventory, _selection, moves) => ({
+				.mockImplementation(async (_plan, _inventory, _selection, moves) => ({
 					...checked({
 						missingProjects: [],
 						missingBindings: [],
 						accessRequirements: [],
 						conflicts: [],
 						warnings: [],
+						missingDependencies: [],
 					}),
 					movedWorkflows: moves.workflows,
 					movedFolders: moves.folders,
@@ -2987,7 +2989,29 @@ describe('PromotionsService', () => {
 					consumers,
 				},
 			],
+			missingDependencies: [],
 		};
+		/** A check that holds one missing dependency, which no other list repeats. */
+		const withDependency = (blocking: boolean): PromotionApplyCheck => ({
+			missingProjects: [],
+			missingBindings: [],
+			accessRequirements: [],
+			conflicts: [],
+			warnings: [],
+			missingDependencies: [
+				{
+					kind: 'credential',
+					id: 'c1',
+					name: 'Header',
+					credentialType: 'httpHeaderAuth',
+					group: 'outside-access',
+					reason: 'not-on-instance',
+					accessible: false,
+					blocking,
+					consumers,
+				},
+			],
+		});
 		const request = {
 			expectedSource: { environmentId: ENVIRONMENT_ID, branchName: 'dev', commitSha: 'remotesha' },
 		};
@@ -3011,13 +3035,14 @@ describe('PromotionsService', () => {
 		);
 
 		it('imports when only projects are missing', async () => {
-			check.mockReturnValueOnce(
+			check.mockResolvedValueOnce(
 				checked({
 					missingProjects: [{ id: 'p1', name: 'Orders' }],
 					missingBindings: [],
 					accessRequirements: [],
 					conflicts: [],
 					warnings: [],
+					missingDependencies: [],
 				}),
 			);
 			expect(await service.apply(ENVIRONMENT_ID, actor)).toMatchObject({ status: 'applied' });
@@ -3033,9 +3058,10 @@ describe('PromotionsService', () => {
 					accessRequirements: [],
 					conflicts: [],
 					warnings: [],
+					missingDependencies: [],
 					[group]: unresolved[group],
 				};
-				check.mockReturnValueOnce(checked(applyCheck));
+				check.mockResolvedValueOnce(checked(applyCheck));
 				expect(await service.apply(ENVIRONMENT_ID, actor)).toEqual({
 					status: 'blocked',
 					environmentId: ENVIRONMENT_ID,
@@ -3053,25 +3079,26 @@ describe('PromotionsService', () => {
 		);
 
 		it('returns fresh groups on Continue and imports only after they clear', async () => {
-			check.mockReturnValueOnce(checked(unresolved));
+			check.mockResolvedValueOnce(checked(unresolved));
 			expect(await service.apply(ENVIRONMENT_ID, actor)).toMatchObject({
 				status: 'blocked',
 				check: unresolved,
 			});
 			const fresh = { ...unresolved, missingBindings: [] };
-			check.mockReturnValueOnce(checked(fresh));
+			check.mockResolvedValueOnce(checked(fresh));
 			expect(await service.continueApply(ENVIRONMENT_ID, actor, request)).toMatchObject({
 				status: 'blocked',
 				check: fresh,
 			});
 			expect(n8nPackagesService.applyPackagePlan).not.toHaveBeenCalled();
-			check.mockReturnValueOnce(
+			check.mockResolvedValueOnce(
 				checked({
 					missingProjects: [],
 					missingBindings: [],
 					accessRequirements: [],
 					conflicts: [],
 					warnings: unresolved.warnings,
+					missingDependencies: [],
 				}),
 			);
 			expect(await service.continueApply(ENVIRONMENT_ID, actor, request)).toMatchObject({
@@ -3083,19 +3110,47 @@ describe('PromotionsService', () => {
 		});
 
 		it('imports with warnings on initial Apply', async () => {
-			check.mockReturnValueOnce(
+			check.mockResolvedValueOnce(
 				checked({
 					missingProjects: [],
 					missingBindings: [],
 					accessRequirements: [],
 					conflicts: [],
 					warnings: unresolved.warnings,
+					missingDependencies: [],
 				}),
 			);
 			expect(await service.apply(ENVIRONMENT_ID, actor)).toMatchObject({
 				status: 'applied',
 				warnings: unresolved.warnings,
 			});
+		});
+
+		it('blocks on a missing dependency that stops the Apply, also on a confirmed Continue', async () => {
+			const applyCheck = withDependency(true);
+			check.mockResolvedValue(checked(applyCheck));
+			const blocked = {
+				status: 'blocked',
+				environmentId: ENVIRONMENT_ID,
+				git: { commitSha: 'remotesha', branchName: 'dev' },
+				check: applyCheck,
+			};
+
+			expect(await service.apply(ENVIRONMENT_ID, actor)).toEqual(blocked);
+			expect(
+				await service.continueApply(ENVIRONMENT_ID, actor, {
+					...request,
+					confirmDestructiveChanges: true,
+				}),
+			).toEqual(blocked);
+			expect(n8nPackagesService.applyPackagePlan).not.toHaveBeenCalled();
+		});
+
+		it('imports when no missing dependency stops the Apply', async () => {
+			check.mockResolvedValueOnce(checked(withDependency(false)));
+
+			expect(await service.apply(ENVIRONMENT_ID, actor)).toMatchObject({ status: 'applied' });
+			expect(n8nPackagesService.applyPackagePlan).toHaveBeenCalledWith(plan);
 		});
 
 		it.each([{ commitSha: 'older' }, { branchName: 'older' }, { environmentId: 'older' }])(
@@ -3456,9 +3511,10 @@ describe('PromotionsService', () => {
 								accessRequirements: [],
 								conflicts: [],
 								warnings: [],
+								missingDependencies: [],
 								[group]: unresolved[group],
 							};
-							check.mockReturnValueOnce(checked(applyCheck));
+							check.mockResolvedValueOnce(checked(applyCheck));
 							expect(
 								await service[method]('p1', actor, {
 									workflowIds: ['w1', 'deleted'],
@@ -3487,14 +3543,39 @@ describe('PromotionsService', () => {
 						},
 					);
 
+					it('blocks the selection on a missing dependency that stops the Apply', async () => {
+						const applyCheck = withDependency(true);
+						check.mockResolvedValueOnce(checked(applyCheck));
+
+						expect(await service[method]('p1', actor, { workflowIds: ['w1'], ...request })).toEqual(
+							{
+								status: 'blocked',
+								environmentId: ENVIRONMENT_ID,
+								git: { branchName: 'dev', commitSha: 'remotesha' },
+								check: applyCheck,
+							},
+						);
+						expect(n8nPackagesService.applyPackagePlan).not.toHaveBeenCalled();
+					});
+
+					it('imports the selection when no missing dependency stops the Apply', async () => {
+						check.mockResolvedValueOnce(checked(withDependency(false)));
+
+						expect(
+							await service[method]('p1', actor, { workflowIds: ['w1'], ...request }),
+						).toMatchObject({ status: 'applied' });
+						expect(n8nPackagesService.applyPackagePlan).toHaveBeenCalledOnce();
+					});
+
 					it('imports the selection and returns counts without project reconciliation', async () => {
-						check.mockReturnValueOnce(
+						check.mockResolvedValueOnce(
 							checked({
 								missingProjects: [],
 								missingBindings: [],
 								accessRequirements: [],
 								conflicts: [],
 								warnings: unresolved.warnings,
+								missingDependencies: [],
 							}),
 						);
 						const result = await service[method]('p1', actor, {

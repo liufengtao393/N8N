@@ -79,10 +79,13 @@ export function usePromotionPreviewLabels() {
 					interpolate: { project: resource.movedFromProject.name },
 				});
 			}
-			return i18n.baseText('promotions.preview.marker.workflow', {
-				adjustToNumber: blocking.length,
-				interpolate: { count: String(blocking.length) },
-			});
+			return i18n.baseText(
+				// Users cannot resolve a dependency that they cannot access.
+				blocking.every(({ kind }) => kind === 'outside')
+					? 'promotions.preview.marker.workflow.outside'
+					: 'promotions.preview.marker.workflow',
+				{ adjustToNumber: blocking.length, interpolate: { count: String(blocking.length) } },
+			);
 		}
 		const [first] = blocking;
 		if (first.kind === 'moved' && resource.type === 'folder') {
@@ -97,25 +100,44 @@ export function usePromotionPreviewLabels() {
 		if (first.kind === 'missing' && resource.type === 'variable') {
 			return i18n.baseText('promotions.preview.marker.missingVariable', options);
 		}
+		if (first.kind === 'outside' && resource.type === 'credential') {
+			return i18n.baseText('promotions.preview.marker.outsideCredential', options);
+		}
 		return i18n.baseText('promotions.preview.marker.conflict', options);
 	}
 
-	/** What a workflow shows about the dependencies that Promote leaves out. They do not stop it. */
-	function missingDependencyMarker(dependencies: readonly PromotionMissingDependency[]): {
-		message: string;
-		icon: IconName;
-	} {
+	/**
+	 * What a workflow shows about the dependencies that Promote leaves out, or that it cannot use
+	 * on this instance after an Apply. They do not stop it.
+	 */
+	function missingDependencyMarker(
+		dependencies: readonly PromotionMissingDependency[],
+		direction: PromotionDirection,
+	): { message: string; icon: IconName } {
 		const options = {
 			adjustToNumber: dependencies.length,
 			interpolate: { count: String(dependencies.length) },
 		};
+		// On Apply, the status of this reason is "Not on the branch". Promote gives the reason to
+		// every dependency that it leaves out.
+		const notOnBranch = ({ reason }: PromotionMissingDependency) =>
+			direction === 'apply' && reason === 'not-on-branch';
 		// The icons are those of the statuses in the Issues tab. The lock is only for "No access".
-		return dependencies.every(({ group }) => group === 'outside-access')
-			? { message: i18n.baseText('promotions.preview.marker.outside', options), icon: 'lock' }
-			: {
-					message: i18n.baseText('promotions.preview.marker.notIncluded', options),
-					icon: 'circle-minus',
-				};
+		if (dependencies.every((entry) => entry.group === 'outside-access' && !notOnBranch(entry))) {
+			return { message: i18n.baseText('promotions.preview.marker.outside', options), icon: 'lock' };
+		}
+		if (direction === 'promote') {
+			return {
+				message: i18n.baseText('promotions.preview.marker.notIncluded', options),
+				icon: 'circle-minus',
+			};
+		}
+		return {
+			message: dependencies.every(notOnBranch)
+				? i18n.baseText('promotions.preview.marker.notOnBranch', options)
+				: i18n.baseText('promotions.preview.marker.notUsable', options),
+			icon: 'circle-minus',
+		};
 	}
 
 	/** The checkbox of a project or folder selects it and everything inside it. */

@@ -1117,7 +1117,7 @@ export class PromotionsService {
 		// every selection, so the user moves it back first.
 		const requestedWorkflowIds = new Set(requested.workflowIds);
 		const check = blockingCheck(
-			this.applyPreviewService.check(plan, inventory, selection, {
+			await this.applyPreviewService.check(plan, inventory, selection, {
 				...moves,
 				workflows: moves.workflows.filter(({ id }) => requestedWorkflowIds.has(id)),
 			}),
@@ -1205,7 +1205,7 @@ export class PromotionsService {
 			'enforce',
 		);
 		const check = blockingCheck(
-			this.applyPreviewService.check(plan, inventory, undefined, moves),
+			await this.applyPreviewService.check(plan, inventory, undefined, moves),
 			await this.applyPreviewService.projectDeletions(inventory),
 		);
 		if (this.isBlocked(check, confirmDestructiveChanges, identity)) {
@@ -1356,10 +1356,12 @@ export class PromotionsService {
 		const blockingConflicts = confirmDestructiveChanges
 			? check.conflicts.filter(({ code }) => !isConfirmableConflict(code))
 			: check.conflicts;
+		// A dependency outside the access of the user is only in `missingDependencies`.
 		const blocked =
 			check.missingBindings.length > 0 ||
 			check.accessRequirements.length > 0 ||
-			blockingConflicts.length > 0;
+			blockingConflicts.length > 0 ||
+			check.missingDependencies.some(({ blocking }) => blocking);
 		if (blocked) {
 			this.logger.info('Apply blocked', {
 				status: 'blocked',
@@ -1369,6 +1371,7 @@ export class PromotionsService {
 					accessRequirements: check.accessRequirements.length,
 					conflicts: check.conflicts.length,
 					warnings: check.warnings.length,
+					missingDependencies: check.missingDependencies.length,
 				},
 			});
 		}
