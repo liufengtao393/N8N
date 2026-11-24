@@ -41,7 +41,7 @@ properties:
     description: Whether you can access the project that holds the dependency.
   blocking:
     type: boolean
-    description: Whether the operation stops on this dependency. When false, the operation continues without it.
+    description: Whether the operation stops on this dependency until you resolve it. When false, the operation continues without it when the request sends `confirmMissingDependencies`.
   condition:
     type: string
     enum:

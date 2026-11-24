@@ -58,6 +58,21 @@ describe('Promotions in Public API', () => {
 	}
 
 	const remote = { schemaVersion: 1, remoteUrl: 'https://example.com/org/repo.git' };
+	/** A credential that a promoted workflow uses and that a Promote leaves out. */
+	const missingDependency = {
+		kind: 'credential' as const,
+		id: 'c9',
+		name: 'CRM key',
+		credentialType: 'httpHeaderAuth',
+		group: 'other-project' as const,
+		reason: 'not-on-branch' as const,
+		accessible: true,
+		blocking: false,
+		consumers: [
+			{ project: { id: 'proj1', name: 'Alpha' }, workflows: [{ id: 'w1', name: 'Sync' }] },
+		],
+	};
+	const reviewedRevision = 'c'.repeat(64);
 	const applySettings = { schemaVersion: 1, branchName: 'main' };
 	const promoteEnvironment = {
 		direction: 'promote',
@@ -1940,6 +1955,38 @@ describe('Promotions in Public API', () => {
 		}
 	});
 
+	it('passes the confirmation and the reviewed revision to Promote, and returns its status', async () => {
+		const environmentId = randomUUID();
+		const refused = {
+			status: 'missing-dependencies' as const,
+			environmentId,
+			missingDependencies: [missingDependency],
+			warnings: [],
+		};
+		const promote = vi
+			.spyOn(Container.get(PromotionsService), 'promote')
+			.mockResolvedValueOnce(refused);
+		try {
+			const response = await testServer
+				.publicApiAgentFor(owner)
+				.post(`/promotions/environments/${environmentId}/promote`)
+				.send({ confirmMissingDependencies: false, expectedPreviewRevision: reviewedRevision });
+
+			expect(response.status, JSON.stringify(response.body)).toBe(200);
+			expect(response.body).toEqual(refused);
+			expect(promote).toHaveBeenCalledWith(
+				environmentId,
+				expect.objectContaining({ id: owner.id }),
+				expect.objectContaining({
+					confirmMissingDependencies: false,
+					expectedPreviewRevision: reviewedRevision,
+				}),
+			);
+		} finally {
+			promote.mockRestore();
+		}
+	});
+
 	it('refuses to change the authentication method of a provider', async () => {
 		const agent = testServer.publicApiAgentFor(owner);
 		const providerId = await createProvider(agent);
@@ -2393,6 +2440,7 @@ describe('Promotions in Public API', () => {
 			environmentId: 'env1',
 			counts: { workflows: 2, folders: 0, credentials: 0, dataTables: 0, variables: 0, tags: 0 },
 			git: { commitSha: 'a'.repeat(40), branchName: 'main' },
+			missingDependencies: [missingDependency],
 		};
 
 		it('requires the promote API-key scope', async () => {
@@ -2492,6 +2540,37 @@ describe('Promotions in Public API', () => {
 			}
 		});
 
+		it('forwards the confirmation of the missing dependencies with the reviewed revision', async () => {
+			const project = await createTeamProject('Team project', owner);
+			const promote = vi
+				.spyOn(Container.get(PromotionsService), 'promoteProjectSelection')
+				.mockResolvedValue(promoteResult);
+			try {
+				const response = await testServer
+					.publicApiAgentFor(owner)
+					.post(`/promotions/projects/${project.id}/promote`)
+					.send({
+						workflowIds: ['w1'],
+						confirmMissingDependencies: true,
+						expectedPreviewRevision: reviewedRevision,
+					});
+
+				expect(response.status, JSON.stringify(response.body)).toBe(200);
+				expect(response.body).toEqual(promoteResult);
+				expect(promote).toHaveBeenLastCalledWith(
+					project.id,
+					expect.anything(),
+					expect.objectContaining({
+						workflowIds: ['w1'],
+						confirmMissingDependencies: true,
+						expectedPreviewRevision: reviewedRevision,
+					}),
+				);
+			} finally {
+				promote.mockRestore();
+			}
+		});
+
 		it('reaches the service and reports the missing instance environment with 404', async () => {
 			const project = await createTeamProject('Team project', owner);
 			const response = await testServer
@@ -2585,6 +2664,36 @@ describe('Promotions in Public API', () => {
 			}
 		});
 
+		it('accepts confirmMissingDependencies on Continue, and refuses it on the first Apply', async () => {
+			const service = Container.get(PromotionsService);
+			const initial = vi.spyOn(service, 'applyProjectSelection');
+			const continuation = vi.spyOn(service, 'continueApplyProjectSelection').mockResolvedValue({
+				status: 'source-changed',
+				environmentId: selectionBody.expectedSource.environmentId,
+				git: { branchName: 'main', commitSha: selectionBody.expectedSource.commitSha },
+			});
+			const body = { ...selectionBody, confirmMissingDependencies: true };
+			const agent = testServer.publicApiAgentFor(owner);
+			try {
+				const first = await agent.post('/promotions/projects/proj1/apply').send(body);
+				const continued = await agent.post('/promotions/projects/proj1/apply/continue').send(body);
+
+				expect(first.status, JSON.stringify(first.body)).toBe(400);
+				expect(initial).not.toHaveBeenCalled();
+				expect(continued.status, JSON.stringify(continued.body)).toBe(200);
+				expect(continuation).toHaveBeenCalledWith(
+					'proj1',
+					expect.objectContaining({ id: owner.id }),
+					body,
+					'other',
+					undefined,
+				);
+			} finally {
+				initial.mockRestore();
+				continuation.mockRestore();
+			}
+		});
+
 		it.each(['blocked', 'applied', 'source-changed'] as const)(
 			'returns the %s contract through both selective apply routes with only the apply scope',
 			async (status) => {
@@ -2602,9 +2711,30 @@ describe('Promotions in Public API', () => {
 						scope: { kind: 'global' },
 						consumers,
 					},
+					{
+						kind: 'credential',
+						code: 'missing-on-source',
+						id: 'credential2',
+						name: 'Old key',
+						consumers,
+					},
+				];
+				const confirmed = [
+					{
+						kind: 'credential',
+						id: 'credential1',
+						name: 'CRM key',
+						credentialType: 'httpHeaderAuth',
+						group: 'outside-access',
+						reason: 'not-on-instance',
+						accessible: false,
+						blocking: false,
+						consumers,
+					},
 				];
 				const result = ApplyPackageResultDto.parse({
 					status,
+					missingDependencies: confirmed,
 					environmentId: selectionBody.expectedSource.environmentId,
 					git: { branchName: 'main', commitSha: selectionBody.expectedSource.commitSha },
 					check: {
@@ -2632,6 +2762,7 @@ describe('Promotions in Public API', () => {
 								blocking: true,
 								consumers,
 							},
+							...confirmed,
 						],
 					},
 					warnings,
@@ -2667,6 +2798,7 @@ describe('Promotions in Public API', () => {
 							.send(selectionBody);
 						expect(response.status, JSON.stringify(response.body)).toBe(200);
 						expect(response.body).toEqual(result);
+						if (status === 'applied') expect(response.body.missingDependencies).toEqual(confirmed);
 					}
 					expect(initial).toHaveBeenCalledWith(
 						'proj1',
@@ -2786,6 +2918,43 @@ describe('Promotions in Public API', () => {
 			}
 		});
 
+		it('accepts confirmMissingDependencies on Continue, and refuses it on the first Apply', async () => {
+			const agent = testServer.publicApiAgentFor(owner);
+			const id = await createEnvironment(agent);
+			const service = Container.get(PromotionsService);
+			const initial = vi.spyOn(service, 'apply');
+			const continuation = vi.spyOn(service, 'continueApply').mockResolvedValue({
+				status: 'source-changed',
+				environmentId: id,
+				git: { branchName: 'main', commitSha: continueBody.expectedSource.commitSha },
+			});
+			const body = {
+				...continueBody,
+				confirmDestructiveChanges: true,
+				confirmMissingDependencies: true,
+			};
+			try {
+				const first = await agent.post(`/promotions/environments/${id}/apply`).send(body);
+				const continued = await agent
+					.post(`/promotions/environments/${id}/apply/continue`)
+					.send(body);
+
+				expect(first.status, JSON.stringify(first.body)).toBe(400);
+				expect(initial).not.toHaveBeenCalled();
+				expect(continued.status, JSON.stringify(continued.body)).toBe(200);
+				expect(continuation).toHaveBeenCalledWith(
+					id,
+					expect.objectContaining({ id: owner.id }),
+					body,
+					'other',
+					undefined,
+				);
+			} finally {
+				initial.mockRestore();
+				continuation.mockRestore();
+			}
+		});
+
 		it.each(['blocked', 'applied', 'source-changed'] as const)(
 			'returns the %s contract through both Apply routes with only the pull API-key scope',
 			async (status) => {
@@ -2806,9 +2975,30 @@ describe('Promotions in Public API', () => {
 						scope: { kind: 'global' },
 						consumers,
 					},
+					{
+						kind: 'credential',
+						code: 'missing-on-source',
+						id: 'credential2',
+						name: 'Old key',
+						consumers,
+					},
+				];
+				const confirmed = [
+					{
+						kind: 'credential',
+						id: 'credential1',
+						name: 'CRM key',
+						credentialType: 'httpHeaderAuth',
+						group: 'outside-access',
+						reason: 'not-on-instance',
+						accessible: false,
+						blocking: false,
+						consumers,
+					},
 				];
 				const result = ApplyPackageResultDto.parse({
 					status,
+					missingDependencies: confirmed,
 					environmentId: id,
 					git: { branchName: 'main', commitSha: continueBody.expectedSource.commitSha },
 					check: {
@@ -2836,6 +3026,7 @@ describe('Promotions in Public API', () => {
 								blocking: true,
 								consumers,
 							},
+							...confirmed,
 						],
 					},
 					warnings,
@@ -2868,6 +3059,7 @@ describe('Promotions in Public API', () => {
 							.send(reviewedBody);
 						expect(response.status, JSON.stringify(response.body)).toBe(200);
 						expect(response.body).toEqual(result);
+						if (status === 'applied') expect(response.body.missingDependencies).toEqual(confirmed);
 					}
 					expect(initial).toHaveBeenCalledWith(
 						id,

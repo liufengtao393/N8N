@@ -475,7 +475,9 @@ function removedColumns(
 		.join(', ');
 }
 
-const warnings = computed(() => props.check?.warnings ?? []);
+const warnings = computed(() =>
+	(props.check?.warnings ?? []).filter(({ code }) => code === 'variable-shadowed'),
+);
 
 // Data table changes and warnings do not block the operation, so they share one section.
 const warningCount = computed(

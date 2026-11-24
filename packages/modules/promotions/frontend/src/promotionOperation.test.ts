@@ -101,6 +101,12 @@ describe('promotion operation', () => {
 								scope: { kind: 'global' },
 								consumers: consumer('w3'),
 							},
+							{
+								kind: 'variable',
+								code: 'missing-on-source',
+								name: 'GONE',
+								consumers: consumer('w3'),
+							},
 						],
 					}),
 					movedWorkflows: [
@@ -126,6 +132,8 @@ describe('promotion operation', () => {
 			workflowKeys: ['workflow:w1'],
 		});
 		expect(index.byResource.get('variable:global:API_URL')?.[0].kind).toBe('warning');
+		// A reference that is broken on the source instance marks no row.
+		expect([...index.byResource.keys()].filter((key) => key.includes('GONE'))).toEqual([]);
 		// A data table change that removes values needs a confirmation, but does not block.
 		expect(touchesDestructiveChange(index, ['workflow:w2'])).toBe(true);
 		expect(touchesDestructiveChange(index, ['workflow:w1', 'workflow:w3'])).toBe(false);
