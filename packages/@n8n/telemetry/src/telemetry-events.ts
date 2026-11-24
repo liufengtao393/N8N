@@ -7,6 +7,7 @@ import { CREDENTIALS_TELEMETRY } from './events/credentials';
 import { EXPRESSIONS_TELEMETRY } from './events/expressions';
 import { INSTANCE_TELEMETRY } from './events/instance';
 import { INSTANCE_AI_TELEMETRY } from './events/instance-ai';
+import { INTERNAL_API_TELEMETRY } from './events/internal-api';
 import { MCP_TELEMETRY } from './events/mcp';
 import { MIGRATION_REPORT_TELEMETRY } from './events/migration-report';
 import { PLATFORM_TELEMETRY } from './events/platform';
@@ -35,6 +36,7 @@ export const TELEMETRY_EVENT = {
 	EXPRESSIONS: EXPRESSIONS_TELEMETRY,
 	INSTANCE: INSTANCE_TELEMETRY,
 	INSTANCE_AI: INSTANCE_AI_TELEMETRY,
+	INTERNAL_API: INTERNAL_API_TELEMETRY,
 	MCP: MCP_TELEMETRY,
 	MIGRATION_REPORT: MIGRATION_REPORT_TELEMETRY,
 	PUBLIC_API: PUBLIC_API_TELEMETRY,
