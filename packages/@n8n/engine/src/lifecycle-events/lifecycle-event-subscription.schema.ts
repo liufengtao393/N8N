@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
-/** The lifecycle event subscriptions a caller can ask for. */
-export const LIFECYCLE_EVENT_SUBSCRIPTION_KINDS = ['none', 'all'] as const;
+/**
+ * The lifecycle event subscriptions a caller can ask for. `execution` asks for
+ * the `execution:*` events only, `all` adds the `step:*` events.
+ */
+export const LIFECYCLE_EVENT_SUBSCRIPTION_KINDS = ['none', 'execution', 'all'] as const;
 
 /**
  * Which lifecycle events the caller wants for an execution. The caller sets it

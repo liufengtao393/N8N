@@ -460,20 +460,23 @@ describe('POST /api/workflow-executions (integration)', () => {
 		expect((await executionStore.loadExecution(body.executionId)).parent).toBeNull();
 	});
 
-	it('stores the lifecycle event subscription with the row', async () => {
-		const body = startBody({ lifecycleEventSubscription: { kind: 'all' } });
+	it.each(['execution', 'all'] as const)(
+		'stores the lifecycle event subscription %s with the row',
+		async (kind) => {
+			const body = startBody({ lifecycleEventSubscription: { kind } });
 
-		const response = await request(url)
-			.post('/api/workflow-executions')
-			.set(authHeader())
-			.send(body);
+			const response = await request(url)
+				.post('/api/workflow-executions')
+				.set(authHeader())
+				.send(body);
 
-		expect(response.status).toBe(201);
-		const row = await dataSource
-			.getRepository(WorkflowExecution)
-			.findOneOrFail({ where: { id: body.executionId } });
-		expect(row.lifecycleEventSubscription).toEqual({ kind: 'all' });
-	});
+			expect(response.status).toBe(201);
+			const row = await dataSource
+				.getRepository(WorkflowExecution)
+				.findOneOrFail({ where: { id: body.executionId } });
+			expect(row.lifecycleEventSubscription).toEqual({ kind });
+		},
+	);
 
 	it('stores no subscription when the body has no lifecycle event subscription', async () => {
 		const body = startBody();
