@@ -558,6 +558,7 @@ export class AgentRuntime {
 			const activeAbortScope = abortScope;
 
 			await this.prepareResumeMemory(list, state.persistence);
+			await this.memory.maybeCompactForModelSwitch(list, resumeOptions);
 
 			return this.createResumedStream({
 				list,
@@ -1064,6 +1065,7 @@ export class AgentRuntime {
 		// the rest of the turn sees them settled, such as the user's answers in a question card.
 		await this.memory.persistTurnDelta(ctx.list, ctx.options);
 		// Resumed tool results form a new observation boundary before the next model call.
+		await this.memory.maybeCompactForModelSwitch(ctx.list, ctx.options);
 		await this.memory.maybeObserveMidRun(ctx.list, ctx.options);
 		if (resumedTurnEnds(ctx.list.messages(), pendingResume.resumeToolCallId, toolMap)) {
 			state.lastFinishReason = 'stop';
@@ -1101,7 +1103,9 @@ export class AgentRuntime {
 		for (const message of ctx.list.inputDelta()) ctx.acceptedInputIds.add(message.id);
 
 		state.lastFinishReason = turn.finishReason;
-		if (!isReasoningOnlyStop(turn)) ctx.list.addResponse(turn.newMessages);
+		if (!isReasoningOnlyStop(turn)) {
+			ctx.list.addResponse(this.stampAssistantModel(turn.newMessages));
+		}
 		// Drop retained stream text only after the response is in the list.
 		sink.onTurnFolded?.();
 
@@ -1407,6 +1411,15 @@ export class AgentRuntime {
 		}
 	}
 
+	private stampAssistantModel(messages: AgentMessage[]): AgentMessage[] {
+		const modelId = this.modelIdString;
+		if (!modelId || modelId === 'unknown') return messages;
+
+		return messages.map((message) =>
+			'role' in message && message.role === 'assistant' ? { ...message, model: modelId } : message,
+		);
+	}
+
 	/**
 	 * Ask the context cue providers for cues and append the new ones as one
 	 * message. Cues already in the visible conversation are not sent again. After
@@ -1455,7 +1468,6 @@ export class AgentRuntime {
 			},
 		]);
 	}
-
 	private async resolveVolatileInstructions(
 		persistence: AgentPersistenceOptions | undefined,
 	): Promise<string | undefined> {
