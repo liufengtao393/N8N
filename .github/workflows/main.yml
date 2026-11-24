@@ -1,0 +1,50 @@
+name: 自动同步 n8n 历史与最新镜像
+
+on:
+  # 每天 UTC 18:30（北京时间凌晨 02:30）自动检测并同步最新发布的镜像
+  schedule:
+    - cron: '30 18 * * *'
+  # 支持随时手动点击 Run workflow 立即触发
+  workflow_dispatch:
+    inputs:
+      tag_count:
+        description: '本次同步最新的多少个版本标签（首次建议 30，日常追新填 5 即可）'
+        required: true
+        default: '30'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  sync-n8n:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 登录 GitHub 镜像仓库 (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 设置多架构构建工具 (支持 X86 和 ARM NAS)
+        uses: docker/setup-buildx-action@v3
+
+      - name: 优先搬运 latest 最新版标签
+        run: |
+          docker buildx imagetools create \
+            -t ghcr.io/${{ github.repository_owner }}/n8n:latest \
+            n8nio/n8n:latest
+
+      - name: 批量抓取近期版本标签并无损搬运
+        run: |
+          COUNT="${{ github.event.inputs.tag_count || '30' }}"
+          echo "正在获取 n8nio/n8n 最新的 $COUNT 个版本标签..."
+          TAGS=$(curl -s "https://docker.com{COUNT}&ordering=last_updated" | jq -r '.results[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          
+          for TAG in $TAGS; do
+            echo "🚀 正在搬运 n8n:${TAG}"
+            docker buildx imagetools create \
+              -t ghcr.io/${{ github.repository_owner }}/n8n:${TAG} \
+              n8nio/n8n:${TAG} || echo "⚠️ 标签 $TAG 跳过"
+          done
