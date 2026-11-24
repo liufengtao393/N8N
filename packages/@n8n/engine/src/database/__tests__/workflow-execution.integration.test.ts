@@ -589,8 +589,11 @@ describe('workflow_execution table (integration)', () => {
 			const store = stalenessStore();
 			const id = generateId();
 			await store.createExecution(newRecord(id));
-			const observed = await loadStaleAfter(id);
-			if (!observed) throw new Error('expected a stale_after value');
+			// In the past, as the time of an execution that the sweeper renews. The time
+			// of a new execution can be equal to the renewed time, and then the second
+			// call below would also find the observed value.
+			const observed = new Date('2020-01-01T00:01:00.000Z');
+			await dataSource.getRepository(WorkflowExecution).update({ id }, { staleAfter: observed });
 
 			const before = Date.now();
 			expect(await store.renewQueuedExecution(id, observed)).toBe(true);
