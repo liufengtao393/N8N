@@ -36,11 +36,13 @@ import { getPromotionEnvironmentDetails, getPromotionResourceDetails } from '../
 import { PROMOTIONS_SETTINGS_SCOPES, PROMOTIONS_SETTINGS_VIEW } from '../promotions.constants';
 import {
 	indexBlockers,
+	indexByWorkflow,
 	isBlocking,
 	listBlockers,
 	crossProjectMoveBlockers,
 	toOperationRequest,
 	scopeCheck,
+	scopeToSelection,
 	touchesDestructiveChange,
 } from '../promotionOperation';
 import {
@@ -90,6 +92,15 @@ const selection = usePromotionSelection(graph, {
 	disabled: computed(() => blockers.value.blocked),
 	locked: operation.isBusy,
 });
+// Promote only: what the selected workflows use, and the branch does not hold after the Promote.
+// Nothing here stops the Promote.
+const missingDependencies = computed(() =>
+	scopeToSelection(preview.value?.missingDependencies ?? [], selection.selected.value),
+);
+const dependencyWarnings = computed(() =>
+	scopeToSelection(preview.value?.warnings ?? [], selection.selected.value),
+);
+const missingDependenciesByWorkflow = computed(() => indexByWorkflow(missingDependencies.value));
 const activeWorkflowKey = ref<ResourceKey>();
 const details = usePromotionResourceDetails(
 	async (keys) => {
@@ -309,10 +320,19 @@ async function onPromoteConfirm(commitMessage: string | undefined) {
 
 type PreviewTab = 'changes' | 'blockers';
 const activeTab = ref<PreviewTab>('changes');
-const blockerCount = computed(() => blockerList.value.filter(isBlocking).length);
-const showBlockersTab = computed(
-	() => props.direction === 'apply' && !!scopedCheck.value && state.value === 'ready',
+// Warnings do not count in either direction.
+const blockerCount = computed(() =>
+	props.direction === 'apply'
+		? blockerList.value.filter(isBlocking).length
+		: missingDependencies.value.length,
 );
+// Apply always has the tab. Promote has it only when the selection has issues.
+const showBlockersTab = computed(() => {
+	if (state.value !== 'ready') return false;
+	return props.direction === 'apply'
+		? !!scopedCheck.value
+		: missingDependencies.value.length + dependencyWarnings.value.length > 0;
+});
 watch(showBlockersTab, (show) => {
 	if (!show) activeTab.value = 'changes';
 });
@@ -333,7 +353,7 @@ const tabs = computed(() => [
 		: []),
 ]);
 
-// Promote has no Blockers tab, so the tree's blocker icon only opens it on Apply.
+// The tree only opens the tab when the page has it.
 function showBlockers() {
 	if (showBlockersTab.value) activeTab.value = 'blockers';
 }
@@ -370,14 +390,8 @@ const treeResizer = useResizablePanel({
 			<N8nLink :to="backRoute" theme="text" size="small" data-test-id="promotion-preview-back">
 				<span :class="$style.back"><N8nIcon icon="arrow-left" size="small" />{{ backLabel }}</span>
 			</N8nLink>
-			<N8nHeading tag="h1" size="xlarge" :class="$style.title">{{ title }}</N8nHeading>
-			<div :class="$style.tabRow">
-				<N8nTabs
-					v-model="activeTab"
-					:options="tabs"
-					:class="$style.tabs"
-					data-test-id="promotion-preview-tabs"
-				/>
+			<div :class="$style.titleRow">
+				<N8nHeading tag="h1" size="xlarge" :class="$style.title">{{ title }}</N8nHeading>
 				<div :class="$style.actions">
 					<N8nButton
 						variant="outline"
@@ -402,6 +416,12 @@ const treeResizer = useResizablePanel({
 					</N8nButton>
 				</div>
 			</div>
+			<N8nTabs
+				v-model="activeTab"
+				:options="tabs"
+				:class="$style.tabs"
+				data-test-id="promotion-preview-tabs"
+			/>
 		</header>
 
 		<div v-if="state === 'loading'" :class="$style.state" data-test-id="promotion-preview-loading">
@@ -482,6 +502,7 @@ const treeResizer = useResizablePanel({
 						:locked="operation.isBusy.value"
 						:direction="direction"
 						:blockers="blockers"
+						:missing-dependencies="missingDependenciesByWorkflow"
 						:selectable="!isInstance"
 						@show-blockers="showBlockers"
 						@toggle="selection.toggle"
@@ -501,7 +522,8 @@ const treeResizer = useResizablePanel({
 						data-test-id="promotion-preview-submit-blocked"
 					>
 						{{ submitBlockedReason }}
-						<template v-if="showBlockersTab" #trailingContent>
+						<!-- The Issues tab of Promote does not list what disables Promote. -->
+						<template v-if="showBlockersTab && direction === 'apply'" #trailingContent>
 							<N8nButton variant="outline" size="small" @click="activeTab = 'blockers'">
 								{{ i18n.baseText('promotions.preview.card.viewBlockers') }}
 							</N8nButton>
@@ -541,10 +563,13 @@ const treeResizer = useResizablePanel({
 				</section>
 			</div>
 			<PromotionBlockers
-				v-if="showBlockersTab && scopedCheck"
+				v-if="showBlockersTab"
 				v-show="activeTab === 'blockers'"
+				:key="direction"
 				:class="$style.blockers"
 				:check="scopedCheck"
+				:missing-dependencies="missingDependencies"
+				:dependency-warnings="dependencyWarnings"
 				:busy="operation.isBusy.value"
 				@refresh="refresh"
 				@inspect="inspectFromBlockers"
@@ -587,8 +612,16 @@ const treeResizer = useResizablePanel({
 	background-color: var(--background--surface);
 }
 
+.titleRow {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--spacing--sm);
+	width: 100%;
+}
+
 .title {
-	margin-bottom: var(--spacing--2xs);
+	min-width: 0;
 }
 
 .back {
@@ -597,23 +630,13 @@ const treeResizer = useResizablePanel({
 	gap: var(--spacing--4xs);
 }
 
-.tabRow {
-	display: flex;
-	align-items: flex-end;
-	justify-content: space-between;
-	gap: var(--spacing--sm);
+.tabs {
 	width: 100%;
 	border-bottom: var(--border);
 }
 
-.tabs {
-	flex: 1;
-	min-width: 0;
-}
-
 .actions {
 	flex-shrink: 0;
-	align-self: center;
 	display: flex;
 	align-items: center;
 	gap: var(--spacing--2xs);
