@@ -1069,10 +1069,8 @@ describe('WorkflowExecutionService', () => {
 				isArchived: false,
 				nodes: [...triggers, hackerNewsNode],
 				connections: triggers.reduce<IConnections>(
-					(acc, trigger) => ({
-						...acc,
-						...createMainConnection(hackerNewsNode.name, trigger.name),
-					}),
+					(acc, trigger) =>
+						Object.assign(acc, createMainConnection(hackerNewsNode.name, trigger.name)),
 					{},
 				),
 				createdAt: new Date(),
