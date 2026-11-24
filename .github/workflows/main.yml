@@ -1,7 +1,7 @@
-name: 自动同步 n8n 历史与最新镜像
+name: 自动同步 n8n 源码、Release 日志与最新镜像
 
 on:
-  # 每天 UTC 18:30（北京时间凌晨 02:30）自动检测并同步最新发布的镜像
+  # 每天 UTC 18:30（北京时间凌晨 02:30）自动检测并同步
   schedule:
     - cron: '30 18 * * *'
   # 支持随时手动点击 Run workflow 立即触发
@@ -13,13 +13,27 @@ on:
         default: '30'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
   sync-n8n:
     runs-on: ubuntu-latest
     steps:
+      - name: 检出本地仓库（用于同步官方最新源码与标签）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 同步官方最新源码与 Tags 到本地仓库
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git remote add upstream https://github.com || true
+          git fetch upstream master --tags
+          git merge upstream/master --no-edit || git reset --hard upstream/master
+          git push origin master --tags --force
+
       - name: 登录 GitHub 镜像仓库 (GHCR)
         uses: docker/login-action@v3
         with:
@@ -48,3 +62,19 @@ jobs:
               -t ghcr.io/${{ github.repository_owner }}/n8n:${TAG} \
               n8nio/n8n:${TAG} || echo "⚠️ 标签 $TAG 跳过"
           done
+
+      - name: 同步官方最新 Release 更新日志
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh release view --repo n8n-io/n8n --json tagName -q '.tagName')
+          echo "官方最新 Release 版本为: $LATEST_TAG"
+          if ! gh release view "$LATEST_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            BODY=$(gh release view "$LATEST_TAG" --repo n8n-io/n8n --json body -q '.body')
+            gh release create "$LATEST_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "$LATEST_TAG" \
+              --notes "$BODY"
+          else
+            echo "✅ Release $LATEST_TAG 已存在，无需重复创建"
+          fi
