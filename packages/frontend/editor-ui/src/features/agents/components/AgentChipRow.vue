@@ -9,11 +9,14 @@ const props = withDefaults(
 		addButtonTestId?: string;
 		disabled?: boolean;
 		showLabel?: boolean;
+		/** Hides the add button, for when the parent supplies its own. */
+		hideAdd?: boolean;
 	}>(),
 	{
 		addButtonTestId: undefined,
 		disabled: false,
 		showLabel: true,
+		hideAdd: false,
 	},
 );
 
@@ -39,7 +42,12 @@ const emit = defineEmits<{
 					<slot />
 				</div>
 
-				<N8nTooltip v-if="props.itemCount > 0" as-child :content="props.addLabel" placement="top">
+				<N8nTooltip
+					v-if="!props.hideAdd && props.itemCount > 0"
+					as-child
+					:content="props.addLabel"
+					placement="top"
+				>
 					<N8nButton
 						variant="ghost"
 						size="medium"
@@ -57,7 +65,7 @@ const emit = defineEmits<{
 				</N8nTooltip>
 
 				<N8nButton
-					v-else
+					v-else-if="!props.hideAdd"
 					:class="$style.emptyAddButton"
 					variant="ghost"
 					size="medium"
